@@ -82,8 +82,8 @@ CREATE TABLE linked.person (
 
 insert into linked.album (album_cluster,owner_id,base_owner,description,id)          
 with base as (
-select uuid_generate_v4() as album_cluster,"ownerId" as owner_id,true as base_owner,description,id from album
-WHERE album."albumName"::text ~~* '%%linked album%%'::text) 
+	select uuid_generate_v4() as album_cluster,"ownerId" as owner_id,true as base_owner,description,id from album
+	WHERE album."albumName"::text ~~* '%%linked album%%'::text) 
 select album_cluster,owner_id,base_owner,description,id from base 
 union
 select a.album_cluster,b."usersId",false,a.description,uuid_generate_v4() from base as a
@@ -96,19 +96,19 @@ with asset_filter as (select b.album_cluster,a.asset_cluster,b.owner_id,b.base_o
 	inner join  (select *, uuid_generate_v4() as asset_cluster from asset) as a 
 	on a."originalPath" ilike b.description::text || '%%'),
 additional_faces as (select distinct p."faceAssetId", a.album_cluster  from asset_filter as a
-		left join asset_file as af on a.id=af."assetId"
-		left join asset_face as afa on afa."assetId"=a.id
-		left join person as p on p.id=afa."personId"
-		where afa."personId" is not null),
+	left join asset_file as af on a.id=af."assetId"
+	left join asset_face as afa on afa."assetId"=a.id
+	left join person as p on p.id=afa."personId"
+	where afa."personId" is not null),
 final_table as (
-select album_cluster,asset_cluster,owner_id,base_owner,id from asset_filter
-union
-select  b.album_cluster,a.asset_cluster,b.owner_id,b.base_owner,a.id from (select *, uuid_generate_v4() as asset_cluster from asset) as a
-inner join (select distinct "assetId",album_cluster from asset_face as af
-	inner join additional_faces as aaf on af.id=aaf."faceAssetId") as af
-on a.id=af."assetId"
-left join linked.album as b on b.album_cluster=af.album_cluster and a."originalPath" not ilike b.description::text || '%%'
-where owner_id is not null)
+	select album_cluster,asset_cluster,owner_id,base_owner,id from asset_filter
+	union
+	select  b.album_cluster,a.asset_cluster,b.owner_id,b.base_owner,a.id from (select *, uuid_generate_v4() as asset_cluster from asset) as a
+	inner join (select distinct "assetId",album_cluster from asset_face as af
+		inner join additional_faces as aaf on af.id=aaf."faceAssetId") as af
+	on a.id=af."assetId"
+	left join linked.album as b on b.album_cluster=af.album_cluster and a."originalPath" not ilike b.description::text || '%%'
+	where owner_id is not null)
 insert into linked.asset (album_cluster, asset_cluster, owner_id, base_owner, id) 
 select a.album_cluster,a.asset_cluster,a.owner_id,a.base_owner,coalesce(aa.id,uuid_generate_v4()) as id from final_table as a left join asset as aa on a.id=aa.id and a.owner_id=aa."ownerId"
 on conflict (id) do nothing;
@@ -116,8 +116,8 @@ on conflict (id) do nothing;
 ---- create linked_asset_file
 
 with base as (select la.asset_cluster,af.files_cluster,la.owner_id,la.base_owner,la.id as asset_id,af.id from (select *,uuid_generate_v4() as files_cluster from asset_file) as af
-inner join linked.asset as la on af."assetId"=la.id
-where la.base_owner is true)
+	inner join linked.asset as la on af."assetId"=la.id
+	where la.base_owner is true)
 --
 insert into linked.asset_file (asset_cluster,files_cluster,owner_id,base_owner,asset_id,id) 
 select asset_cluster,files_cluster,owner_id,base_owner,asset_id,id from base
@@ -130,8 +130,8 @@ on conflict (id) do nothing;
 ---- linked_asset_face
 
 with base as (select la.asset_cluster,af.face_cluster,la.owner_id,la.base_owner,la.id as asset_id,af."personId" as person_id,af.id from (select *,uuid_generate_v4() as face_cluster from asset_face) as af
-inner join linked.asset as la on la.id=af."assetId"
-where la.base_owner is true)
+	inner join linked.asset as la on la.id=af."assetId"
+	where la.base_owner is true)
 ---
 insert into linked.asset_face (asset_cluster,face_cluster,owner_id,base_owner,asset_id,person_id,id) 
 select asset_cluster,face_cluster,owner_id,base_owner,asset_id,person_id,id from base
@@ -144,8 +144,8 @@ on conflict (id) do nothing;
 ---- create linked_person
 
 with base as (select distinct on (p.id) la.asset_cluster,la.face_cluster,la.id as face_asset_id,la.owner_id,la.base_owner,la.asset_id,p.id from person as p
-inner join linked.asset_face as la on la.id=p."faceAssetId"
-where la.base_owner is true)
+	inner join linked.asset_face as la on la.id=p."faceAssetId"
+	where la.base_owner is true)
 --
 insert into linked.person (asset_cluster,face_cluster,face_asset_id,owner_id,base_owner,asset_id,id) 
 select asset_cluster,face_cluster,face_asset_id,owner_id,base_owner,asset_id,id from base
@@ -167,9 +167,9 @@ where a.person_id=b.idi and a.owner_id=b.owner_id;
 ---- create linked.shared_album
 
 with base as (select distinct on (aaa."albumsId") a."albumName",a.shared_album_cluster,la.asset_cluster,la.owner_id,la.base_owner,aaa."albumsId" from album_asset as aaa
-inner join linked.asset as la on aaa."assetsId"=la.id
-left join (select *,uuid_generate_v4() as shared_album_cluster from album) as a on aaa."albumsId"=a.id
-where la.base_owner is true)
+	inner join linked.asset as la on aaa."assetsId"=la.id
+	left join (select *,uuid_generate_v4() as shared_album_cluster from album) as a on aaa."albumsId"=a.id
+	where la.base_owner is true)
 insert into linked.shared_album (album_name,shared_album_cluster,owner_id,base_owner,id) 
 select "albumName",shared_album_cluster,owner_id,base_owner,"albumsId" from base
 union 
@@ -180,9 +180,9 @@ where ls.base_owner is false;
 ---- create linked.tag
 
 with base as (select distinct on (ta."tagsId") t.tag_cluster,la.asset_cluster,la.owner_id,la.base_owner,true as parent_updated,ta."tagsId" as id from tag_asset as ta
-inner join linked.asset as la on ta."assetsId"=la.id
-left join (select *,uuid_generate_v4() as tag_cluster from tag) as t on ta."tagsId"=t.id
-where la.base_owner is true)
+	inner join linked.asset as la on ta."assetsId"=la.id
+	left join (select *,uuid_generate_v4() as tag_cluster from tag) as t on ta."tagsId"=t.id
+	where la.base_owner is true)
 insert into linked.tag (tag_cluster,owner_id,base_owner,parent_updated,id) 
 select tag_cluster,owner_id,base_owner,parent_updated,id from base
 union
@@ -199,44 +199,40 @@ where ls.base_owner is false;
 ---- insert asset
 
 WITH joined AS (
-  SELECT 
-    n.id as new_id,
+	SELECT 
+	n.id as new_id,
     n.owner_id,
     to_jsonb(t) AS data
-  FROM linked.asset m
-  left JOIN asset t ON t.id = m.id
-  left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
-  where m.base_owner is true and n.base_owner is false
-),
+  	FROM linked.asset m
+  	left JOIN asset t ON t.id = m.id
+  	left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
+  	where m.base_owner is true and n.base_owner is false),
 patched AS (
-  SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
+	SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
   							'ownerId', to_jsonb(owner_id)) AS new_data
-  FROM joined)
+	FROM joined)
 INSERT INTO asset
-SELECT 
-  (jsonb_populate_record(NULL::asset, new_data)).*
+SELECT (jsonb_populate_record(NULL::asset, new_data)).*
 FROM patched
 ON CONFLICT (id) DO NOTHING;
 
 ---- insert shared_album
 
 WITH joined AS (
-  SELECT 
+	SELECT 
     n.id as new_id,
     n.owner_id,
     to_jsonb(t) AS data
-  FROM linked.shared_album m
-  left JOIN album t ON t.id = m.id
-  left JOIN linked.shared_album n ON m.shared_album_cluster = n.shared_album_cluster
-  where m.base_owner is true and n.base_owner is false
-),
+  	FROM linked.shared_album m
+  	left JOIN album t ON t.id = m.id
+  	left JOIN linked.shared_album n ON m.shared_album_cluster = n.shared_album_cluster
+  	where m.base_owner is true and n.base_owner is false),
 patched AS (
-  SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
+	SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
   							'ownerId', to_jsonb(owner_id)) AS new_data
-  FROM joined)
+	FROM joined)
 INSERT INTO album
-SELECT 
-  (jsonb_populate_record(NULL::album, new_data)).*
+SELECT (jsonb_populate_record(NULL::album, new_data)).*
 FROM patched
 ON CONFLICT (id) DO NOTHING;
 
@@ -257,24 +253,22 @@ with link as (select m.id as base_id, n.id, n.tag_cluster,n.owner_id
 	from linked.tag as m left JOIN linked.tag as n ON m.tag_cluster = n.tag_cluster 
 	where m.base_owner is true and n.base_owner is false),
 joined AS (
-  SELECT 
+	SELECT 
     n.id as new_id,
     n.owner_id,
     l.id as parent_id,
     to_jsonb(t) AS data
-  from link as n
-  left JOIN tag as t ON t.id = n.base_id
-  left JOIN (select base_id, id, owner_id from link) as l ON t."parentId" = l.base_id and n.owner_id=l.owner_id
-),
+  	from link as n
+  	left JOIN tag as t ON t.id = n.base_id
+  	left JOIN (select base_id, id, owner_id from link) as l ON t."parentId" = l.base_id and n.owner_id=l.owner_id),
 patched AS (
-  SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
+	SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
   							'parentId', to_jsonb(parent_id),
   							'userId', to_jsonb(owner_id)) AS new_data
-  FROM joined),
+	FROM joined),
 parent_updated as (update linked.tag set parent_updated = true where id in (select id from link) RETURNING 1)
 INSERT INTO tag
-SELECT 
-  (jsonb_populate_record(NULL::tag, new_data)).*
+SELECT (jsonb_populate_record(NULL::tag, new_data)).*
 FROM patched
 ON CONFLICT (id) DO NOTHING;
 
@@ -299,70 +293,64 @@ on conflict (id_ancestor,id_descendant) do nothing;
 ---- insert asset_file
 
 WITH joined AS (
-  SELECT 
+	SELECT 
     n.id as new_id,
     n.owner_id,
     n.asset_id,
     to_jsonb(t) AS data
-  FROM (select  n.*, m.id as id_base from linked.asset_file as m 
+  	FROM (select  n.*, m.id as id_base from linked.asset_file as m 
     inner join linked.asset_file as n using(asset_cluster,files_cluster)
     where m.base_owner is true and n.base_owner is false) as n
-  left JOIN asset_file t ON t.id = n.id_base
-),
+  	left JOIN asset_file t ON t.id = n.id_base),
 patched AS (
-  SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
+	SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
   								'ownerId', to_jsonb(owner_id), 
   								'assetId', to_jsonb(asset_id)) AS new_data
-  FROM joined)
+	FROM joined)
 INSERT INTO asset_file
-SELECT 
-  (jsonb_populate_record(NULL::asset_file, new_data)).*
+SELECT (jsonb_populate_record(NULL::asset_file, new_data)).*
 FROM patched
 ON CONFLICT (id) DO NOTHING;
 
 ---- insert asset_face
 
 WITH joined AS (
-  SELECT 
+	SELECT 
     n.id as new_id,
     n.asset_id,
     to_jsonb(t) AS data
-  FROM (select  n.*, m.id as idi from linked.asset_face as m 
+	FROM (select  n.*, m.id as idi from linked.asset_face as m 
     inner join linked.asset_face as n using(asset_cluster,face_cluster)
     where m.base_owner is true and n.base_owner is false) as n
-  left JOIN asset_face t ON t.id = n.idi
-),
+  	left JOIN asset_face t ON t.id = n.idi),
 patched AS (
-  SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
+	SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
   								'assetId', to_jsonb(asset_id)) AS new_data
-  FROM joined)
+  	FROM joined)
 INSERT INTO asset_face
-SELECT 
-  (jsonb_populate_record(NULL::asset_face, new_data)).*
+SELECT (jsonb_populate_record(NULL::asset_face, new_data)).*
 FROM patched
 ON CONFLICT (id) DO NOTHING;
 
 ---- insert person
 
 WITH joined AS (
-  SELECT 
+	SELECT 
     n.id as new_id,
     n.owner_id,
     n.face_asset_id,
     to_jsonb(t) AS data
-  FROM (select  n.*, m.id as idi from linked.person as m 
+  	FROM (select  n.*, m.id as idi from linked.person as m 
     inner join linked.person as n using(asset_cluster,face_cluster)
     where m.base_owner is true and n.base_owner is false) as n
-  left JOIN person t ON t.id = n.idi
-),
+  	left JOIN person t ON t.id = n.idi),
 patched AS (
-  SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
+	SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
   								'ownerId', to_jsonb(owner_id), 
   								'faceAssetId', to_jsonb(face_asset_id)) AS new_data
-  FROM joined)
+	FROM joined)
 INSERT INTO person
-SELECT 
-  (jsonb_populate_record(NULL::person, new_data)).*
+SELECT (jsonb_populate_record(NULL::person, new_data)).*
 FROM patched
 ON CONFLICT (id) DO NOTHING;
 
@@ -376,60 +364,54 @@ where a.id=b.id;
 ---- insert asset_exif
 
 WITH joined AS (
-  SELECT 
+	SELECT 
     n.id as new_id,
     to_jsonb(t) AS data
-  FROM linked.asset m
-  left JOIN asset_exif t ON t."assetId" = m.id
-  left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
-  where m.base_owner is true and n.base_owner is false
-),
+  	FROM linked.asset m
+  	left JOIN asset_exif t ON t."assetId" = m.id
+  	left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
+  	where m.base_owner is true and n.base_owner is false),
 patched AS (
-  SELECT data || jsonb_build_object('assetId', to_jsonb(new_id) ) AS new_data
-  FROM joined)
+	SELECT data || jsonb_build_object('assetId', to_jsonb(new_id) ) AS new_data
+	FROM joined)
 INSERT INTO asset_exif
-SELECT 
-  (jsonb_populate_record(NULL::asset_exif, new_data)).*
+SELECT (jsonb_populate_record(NULL::asset_exif, new_data)).*
 FROM patched
 ON CONFLICT ("assetId") DO NOTHING;
 
 ---- insert smart_search
 
 WITH joined AS (
-  SELECT 
+	SELECT 
     n.id as new_id,
     to_jsonb(t) AS data
-  FROM linked.asset m
-  inner JOIN smart_search t ON t."assetId" = m.id
-  inner JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
-  where m.base_owner is true and n.base_owner is false
-),
+	FROM linked.asset m
+	inner JOIN smart_search t ON t."assetId" = m.id
+	inner JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
+	where m.base_owner is true and n.base_owner is false),
 patched AS (
-  SELECT data || jsonb_build_object('assetId', to_jsonb(new_id) ) AS new_data
-  FROM joined)
+	SELECT data || jsonb_build_object('assetId', to_jsonb(new_id) ) AS new_data
+  	FROM joined)
 INSERT INTO smart_search
-SELECT 
-  (jsonb_populate_record(NULL::smart_search, new_data)).*
+SELECT (jsonb_populate_record(NULL::smart_search, new_data)).*
 FROM patched
 ON CONFLICT ("assetId") DO NOTHING;
 
 ---- insert face_search
 
 WITH joined AS (
-  SELECT 
+  	SELECT 
     n.id as new_id,
     to_jsonb(t) AS data
-  FROM linked.asset_face m
-  inner JOIN face_search t ON t."faceId" = m.id
-  inner JOIN linked.asset_face n ON m.face_cluster = n.face_cluster
-  where m.base_owner is true and n.base_owner is false
-),
+	FROM linked.asset_face m
+	inner JOIN face_search t ON t."faceId" = m.id
+	inner JOIN linked.asset_face n ON m.face_cluster = n.face_cluster
+	where m.base_owner is true and n.base_owner is false),
 patched AS (
-  SELECT data || jsonb_build_object('faceId', to_jsonb(new_id) ) AS new_data
-  FROM joined)
+	SELECT data || jsonb_build_object('faceId', to_jsonb(new_id) ) AS new_data
+	FROM joined)
 INSERT INTO face_search
-SELECT 
-  (jsonb_populate_record(NULL::face_search, new_data)).*
+SELECT (jsonb_populate_record(NULL::face_search, new_data)).*
 FROM patched
 ON CONFLICT ("faceId") DO NOTHING;
 
@@ -492,9 +474,9 @@ $$ LANGUAGE plpgsql;
 ---- trigger for delete_asset_recursive
 
 create OR REPLACE trigger trigger_delete_linked_asset before delete
-    on asset for each row 
-    WHEN (pg_trigger_depth() = 0)
-    execute function linked.delete_linked_asset();
+on asset for each row 
+WHEN (pg_trigger_depth() = 0)
+execute function linked.delete_linked_asset();
 
 ---- delete asset from album
 
@@ -520,10 +502,10 @@ $$ LANGUAGE plpgsql;
 ---- create trigger for shared album asset
 
 create OR REPLACE trigger trigger_delete_from_album before delete
-    on
-    album_asset for each row
-    WHEN (pg_trigger_depth() = 0)
-    execute function linked.delete_from_album();
+on
+album_asset for each row
+WHEN (pg_trigger_depth() = 0)
+execute function linked.delete_from_album();
 
 ---- delete tag recursive
 
@@ -546,9 +528,9 @@ $$ LANGUAGE plpgsql;
 ---- trigger for delete_tag_recursive
 
 create OR REPLACE trigger trigger_delete_linked_tag before delete
-    on tag for each row 
-    WHEN (pg_trigger_depth() = 0)
-    execute function linked.delete_linked_tag();
+on tag for each row 
+WHEN (pg_trigger_depth() = 0)
+execute function linked.delete_linked_tag();
 
 ---- delete asset tag
 
@@ -574,9 +556,9 @@ $$ LANGUAGE plpgsql;
 ---- create trigger_delete_asset_tag
 
 create OR REPLACE trigger trigger_delete_asset_tag before delete
-    on tag_asset for each row
-    WHEN (pg_trigger_depth() = 0)
-    execute function linked.delete_asset_tag();
+on tag_asset for each row
+WHEN (pg_trigger_depth() = 0)
+execute function linked.delete_asset_tag();
 
 ---- delete shared album recursive
 
@@ -599,9 +581,9 @@ $$ LANGUAGE plpgsql;
 ---- trigger for delete shared album recursive
 
 create OR REPLACE trigger trigger_delete_shared_album before delete
-    on album for each row 
-    WHEN (pg_trigger_depth() = 0)
-    execute function linked.delete_shared_album();
+on album for each row 
+WHEN (pg_trigger_depth() = 0)
+execute function linked.delete_shared_album();
 
 ---------------------------------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------------------------------
@@ -630,9 +612,9 @@ $$ LANGUAGE plpgsql;
 ---- trigger for update tag recursive
 
 create OR REPLACE trigger trigger_update_linked_tag after update
-    on tag for each row 
-	WHEN (pg_trigger_depth() = 0)
-    execute function linked.update_linked_tag();
+on tag for each row 
+WHEN (pg_trigger_depth() = 0)
+execute function linked.update_linked_tag();
 
 ---- create update albums 
 
@@ -658,9 +640,9 @@ $$ LANGUAGE plpgsql;
 ---- trigger for update albums
 
 create OR REPLACE trigger trigger_update_linked_album after update
-    on album for each row 
-	WHEN (pg_trigger_depth() = 0)
-    execute function linked.update_linked_album();
+on album for each row 
+WHEN (pg_trigger_depth() = 0)
+execute function linked.update_linked_album();
 
 ---- create update asset
 
@@ -689,9 +671,9 @@ $$ LANGUAGE plpgsql;
 ---- trigger for update asset 
 
 create OR REPLACE trigger trigger_update_linked_asset after update
-    on asset for each row 
-	WHEN (pg_trigger_depth() = 0)
-    execute function linked.update_linked_asset();
+on asset for each row 
+WHEN (pg_trigger_depth() = 0)
+execute function linked.update_linked_asset();
 
 ---- create update person metadata
 
@@ -719,9 +701,9 @@ $$ LANGUAGE plpgsql;
 ---- create trigger_update_linked_person
 
 create OR REPLACE trigger trigger_update_linked_person after update
-    on person for each row 
-	WHEN (pg_trigger_depth() = 0)
-    execute function linked.update_linked_person();
+on person for each row 
+WHEN (pg_trigger_depth() = 0)
+execute function linked.update_linked_person();
 
 ---- create update asset metadata
 
@@ -754,9 +736,9 @@ $$ LANGUAGE plpgsql;
 ---- create trigger_update_linked_asset_exif
 
 create OR REPLACE trigger trigger_update_linked_asset_exif after update
-    on asset_exif for each row 
-	WHEN (pg_trigger_depth() = 0)
-    execute function linked.update_linked_asset_exif();
+on asset_exif for each row 
+WHEN (pg_trigger_depth() = 0)
+execute function linked.update_linked_asset_exif();
 
 ---- synchronize asset_face
 
@@ -800,8 +782,7 @@ if EXISTS (SELECT 1 FROM linked.asset WHERE id = new."assetId") and new."personI
 			  								'assetId', to_jsonb(asset_id)) AS new_data
 			  FROM joined)
 			INSERT INTO asset_face
-			SELECT 
-			  (jsonb_populate_record(NULL::asset_face, new_data)).*
+			SELECT (jsonb_populate_record(NULL::asset_face, new_data)).*
 			FROM patched
 			ON CONFLICT (id) DO NOTHING;
 		ELSIF TG_OP = 'UPDATE' THEN
@@ -817,14 +798,14 @@ $$ LANGUAGE plpgsql;
 ---- create trigger_link_asset_face
 
 create OR REPLACE trigger trigger_link_asset_face after update or insert
-    on asset_face for each row 
-	WHEN (pg_trigger_depth() = 0)
-    execute function linked.link_asset_face();
+on asset_face for each row 
+WHEN (pg_trigger_depth() = 0)
+execute function linked.link_asset_face();
 
 ---- create update/create person
 
 CREATE OR REPLACE FUNCTION linked.insert_linked_person()
- RETURNS trigger
+RETURNS trigger
 AS $$
 BEGIN
 	--- with the person already seen
@@ -846,13 +827,13 @@ BEGIN
 			from final_asset_face as faf
 			where af.id = faf.id
 			RETURNING 1)
-			update asset_face as af
-			set "personId" = n.person_id,
-			"deletedAt" = t."deletedAt"
-			  FROM final_asset_face m
-			  inner JOIN asset_face t ON t.id = m.id
-			  inner JOIN final_asset_face n ON m.asset_cluster = n.asset_cluster and m.face_cluster = n.face_cluster
-			  where m.id = new.id and n.id = af.id;
+		update asset_face as af
+		set "personId" = n.person_id,
+		"deletedAt" = t."deletedAt"
+		FROM final_asset_face m
+		inner JOIN asset_face t ON t.id = m.id
+		inner JOIN final_asset_face n ON m.asset_cluster = n.asset_cluster and m.face_cluster = n.face_cluster
+		where m.id = new.id and n.id = af.id;
 	ELSIF EXISTS (SELECT 1 FROM linked.asset WHERE id = (select "assetId" from asset_face where id = (select "faceAssetId" from person where id = new.person_id))) and new.base_owner is true THEN
 		--- create person
 		with base as (select af.asset_cluster,af.face_cluster,af.id as face_asset_id,af.owner_id,af.base_owner,af.asset_id,af.person_id as id from linked.asset_face as af
@@ -910,9 +891,9 @@ $$ LANGUAGE plpgsql;
 ---- create trigger_insert_linked_person
 
 create OR REPLACE trigger trigger_insert_linked_person after update
-    on linked.asset_face for each row 
-	WHEN (pg_trigger_depth() = 1 or pg_trigger_depth() = 0) 
-    execute function linked.insert_linked_person();
+on linked.asset_face for each row 
+WHEN (pg_trigger_depth() = 1 or pg_trigger_depth() = 0) 
+execute function linked.insert_linked_person();
 
 ---------------------------------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------------------------------
@@ -954,8 +935,7 @@ BEGIN
 			  FROM joined),
 			insert_album as (
 				INSERT INTO album
-				SELECT 
-				  (jsonb_populate_record(NULL::album, new_data)).*
+				SELECT (jsonb_populate_record(NULL::album, new_data)).*
 				FROM patched
 				ON CONFLICT (id) DO NOTHING
 				RETURNING 1)
@@ -985,17 +965,14 @@ $$ LANGUAGE plpgsql;
 ---- create trigger_link_new_album
 
 create OR REPLACE trigger trigger_link_new_album after insert
-    on album_asset for each row
-    WHEN (pg_trigger_depth() = 0)
-    execute function linked.link_new_album();
+on album_asset for each row
+WHEN (pg_trigger_depth() = 0)
+execute function linked.link_new_album();
 
 ---- create new tag
 
 CREATE OR REPLACE FUNCTION linked.link_new_tag()
 RETURNS TRIGGER AS $$
-DECLARE
-    a_user_id uuid;
-	a_value text;
 BEGIN
 	IF EXISTS (SELECT 1 FROM linked.asset WHERE id = new."assetsId") THEN
 		IF NOT EXISTS (SELECT 1 FROM linked.tag WHERE id = new."tagsId") THEN
@@ -1083,9 +1060,9 @@ $$ LANGUAGE plpgsql;
 ---- create trigger_link_new_tag
 
 create OR REPLACE trigger trigger_link_new_tag after insert
-    on tag_asset for each row
-    WHEN (pg_trigger_depth() = 0)
-    execute function linked.link_new_tag();
+on tag_asset for each row
+WHEN (pg_trigger_depth() = 0)
+execute function linked.link_new_tag();
 
 ---- create new asset
 
@@ -1161,8 +1138,8 @@ $$ LANGUAGE plpgsql;
 ---- create trigger_link_new_asset
 
 create OR REPLACE trigger trigger_link_new_asset after update
-    on public.asset_job_status for each row 
-    execute function linked.link_new_asset();
+on public.asset_job_status for each row 
+execute function linked.link_new_asset();
 
 ---- create new link to files
 
@@ -1213,8 +1190,8 @@ $$ LANGUAGE plpgsql;
 ---- create triger_link_new_asset_file
 
 create OR REPLACE trigger triger_link_new_asset_file after insert
-    on linked.asset for each row 
-    execute function linked.link_new_asset_file();
+on linked.asset for each row 
+execute function linked.link_new_asset_file();
 
 ---- create new face to asset
 
@@ -1258,8 +1235,7 @@ BEGIN
 			  								'assetId', to_jsonb(asset_id)) AS new_data
 			FROM joined),
 		insert_asset_face as (INSERT INTO asset_face
-			SELECT 
-			  (jsonb_populate_record(NULL::asset_face, new_data)).*
+			SELECT (jsonb_populate_record(NULL::asset_face, new_data)).*
 			FROM patched
 			ON CONFLICT (id) DO NOTHING
 			RETURNING 1),
@@ -1288,9 +1264,9 @@ $$ LANGUAGE plpgsql;
 ---- create trigger_insert_linked_asset_face
 
 create OR REPLACE trigger trigger_insert_linked_asset_face after insert
-    on linked.asset for each row 
-	WHEN (pg_trigger_depth() = 1)
-    execute function linked.insert_linked_asset_face();
+on linked.asset for each row 
+WHEN (pg_trigger_depth() = 1)
+execute function linked.insert_linked_asset_face();
 
 ---- create new asset metadata
 
@@ -1322,9 +1298,9 @@ $$ LANGUAGE plpgsql;
 ---- create triger_link_new_asset_exif
 
 create OR REPLACE trigger triger_link_new_asset_exif after insert
-    on linked.asset for each row 
-    WHEN (pg_trigger_depth() = 1)
-    execute function linked.link_new_asset_exif();
+on linked.asset for each row 
+WHEN (pg_trigger_depth() = 1)
+execute function linked.link_new_asset_exif();
 
 ---- create new smart search 
 
@@ -1356,6 +1332,6 @@ $$ LANGUAGE plpgsql;
 ---- create triger_link_new_smart_search
 
 create OR REPLACE trigger triger_link_new_smart_search after insert
-    on linked.asset for each row 
-    WHEN (pg_trigger_depth() = 1)
-    execute function linked.link_new_smart_search();
+on linked.asset for each row 
+WHEN (pg_trigger_depth() = 1)
+execute function linked.link_new_smart_search();
