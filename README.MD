@@ -62,12 +62,12 @@ Instead of uploading the same files multiple times, this addon allows you to:
    ```
 5. **Manage job concurrency**
 
-Set the following parameters to 1 (Synchronization requirement):
-```
-External Libraries concurrency
-Smart Search concurrency
-Face detection concurrency
-```
+   Set the following parameters to 1 (Synchronization requirement):
+   ```
+   External Libraries concurrency
+   Smart Search concurrency
+   Face detection concurrency
+   ```
 6. **To remove the addon**
 
    ```
