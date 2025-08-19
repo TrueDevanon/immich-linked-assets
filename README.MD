@@ -60,8 +60,15 @@ Instead of uploading the same files multiple times, this addon allows you to:
    ```
    docker exec -i immich_postgres psql --dbname=immich --username=postgres < ./immich_linked_asset.sql
    ```
+5. **Manage job concurrency**
 
-5. **To remove the addon**
+Set the following parameters to 1 (Synchronization requirement):
+```
+External Libraries concurrency
+Smart Search concurrency
+Face detection concurrency
+```
+6. **To remove the addon**
 
    ```
    docker exec -i immich_postgres psql --dbname=immich --username=postgres < ./immich_delete_linked_asset.sql
