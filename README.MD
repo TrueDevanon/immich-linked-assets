@@ -1,6 +1,6 @@
 # Immich Shared Asset Sync Addon
 
-Current tested Immich version: **v1.138.0**
+Current tested Immich version: **v1.140.0**
 
 **Goal:**
 This addon is designed to solve the shared asset problem in [Immich](https://immich.app/) when used as a family gallery with separate accounts for each family member. Normally, you must upload shared family photos to each account separately, which results in:
