@@ -860,7 +860,7 @@ BEGIN
 		  FROM final_person m
 			inner JOIN person t ON t.id = m.id
 			inner JOIN final_person n ON m.asset_cluster = n.asset_cluster and m.face_cluster = n.face_cluster
-			where m.id = new.id),
+			where m.base_owner is true and n.base_owner is false),
 		patched AS (
 		  SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
 		  								'ownerId', to_jsonb(owner_id), 
@@ -1103,9 +1103,9 @@ BEGIN
 		prepare_final_table as (select * from asset_filter
 			union all
 			select * from additional_faces),
-		final_table as (select b.album_cluster,a.asset_cluster,b.owner_id,b.base_owner,coalesce(aa.id,uuid_generate_v4()) as id from prepare_final_table as a 		
+		final_table as (select b.album_cluster,a.asset_cluster,b.owner_id,coalesce(aa.base_owner,false) as base_owner,coalesce(aa.id,uuid_generate_v4()) as id from prepare_final_table as a 		
 			left join linked.album as b on b.album_cluster = a.album_cluster 
-			left join prepare_final_table as aa on b.owner_id = aa.owner_id
+			left join prepare_final_table as aa on b.owner_id = aa.owner_id and aa.asset_cluster = a.asset_cluster
 			),
 		--- insert into asset
 		joined AS (
