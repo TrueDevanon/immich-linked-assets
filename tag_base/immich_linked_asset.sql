@@ -568,7 +568,8 @@ DECLARE
 	a_asset_cluster UUID;
 BEGIN
 	IF EXISTS (SELECT 1 FROM linked.tag WHERE id = old."tagsId") THEN
-		IF not exists (select 1 from linked.tag_helper where id=old."assetsId" and now() - interval '1 second' <= updated) THEN
+		-- IF not exists (select 1 from linked.tag_helper where id=old."assetsId" and now() - interval '1 second' <= updated) THEN
+		IF not exists (select 1 from tag_asset where "tagsId" = old."tagsId" and "assetsId" = old."assetsId") THEN
 			IF exists (select 1 from linked.asset where id=old."assetsId" and base_owner is true) THEN
 				delete from linked.tag_helper where id=old."assetsId";
 				select tag_cluster into a_tag_cluster from linked.tag where id = old."tagsId";
@@ -665,7 +666,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM linked.tag WHERE id = new.id and base_owner is true) THEN
 		SELECT tag_cluster INTO t_cluster FROM linked.tag WHERE id = new.id;
 		update tag
-		set color=new.color
+		set color = new.color
 		where id in (select id from linked.tag WHERE tag_cluster = t_cluster and id != new.id);
 	END IF;
 	RETURN NULL;
@@ -690,10 +691,10 @@ BEGIN
     IF EXISTS (SELECT 1 FROM linked.shared_album WHERE id = new.id and base_owner is true) THEN
 		SELECT shared_album_cluster INTO a_cluster FROM linked.shared_album WHERE id = new.id;
 		update album
-		set "albumName"=new."albumName",
-		description=new.description,
-		"order"=new."order",
-		"isActivityEnabled"=new."isActivityEnabled" 
+		set "albumName" = new."albumName",
+		description = new.description,
+		"order" = new."order",
+		"isActivityEnabled" = new."isActivityEnabled" 
 		where id in (select id from linked.shared_album WHERE shared_album_cluster = a_cluster and id != new.id);
 	END IF;
 	RETURN NULL;
@@ -833,7 +834,7 @@ BEGIN
 		inner JOIN asset_face t ON t.id = m.id
 		inner JOIN final_asset_face n ON m.asset_cluster = n.asset_cluster and m.face_cluster = n.face_cluster
 		where m.id = new.id and n.id = af.id;
-	ELSIF EXISTS (SELECT 1 FROM linked.asset WHERE id = (select "assetId" from asset_face where id = (select "faceAssetId" from person where id = new.person_id))) THEN
+	ELSIF EXISTS (SELECT 1 FROM linked.asset WHERE id = (select "assetId" from asset_face where id = (select "faceAssetId" from person where id = new.person_id))) and new.base_owner is true THEN
 		--- create person
 		with base as (select af.asset_cluster,af.face_cluster,af.id as face_asset_id,af.owner_id,af.base_owner,af.asset_id,af.person_id as id from linked.asset_face as af
 			where af.id=new.id),
@@ -874,13 +875,13 @@ BEGIN
 		update_face_to_person as (update linked.asset_face as a
 			set person_id = fp.id
 			from final_person as fp
-			where a.id=fp.face_asset_id
+			where a.id = fp.face_asset_id
 			RETURNING 1)
 		--- update person_id in asset_face
 		update asset_face as a
 			set "personId" = fp.id
 			from final_person as fp
-			where a.id=fp.face_asset_id;
+			where a.id = fp.face_asset_id;
 	END IF;
 	RETURN NULL;
 END;
