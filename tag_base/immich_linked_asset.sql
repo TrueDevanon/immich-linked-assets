@@ -76,6 +76,8 @@ CREATE TABLE linked.person (
 
 create table linked.tag_helper (
 	id uuid not null, 
+	tag_id uuid not null,
+	type text not null,
 	updated timestamp default NOW() not null, 
 	CONSTRAINT tag_helper_pk PRIMARY KEY (id));
 
@@ -196,6 +198,19 @@ union
 select b."albumName",b.shared_album_cluster,ls.owner_id,false,uuid_generate_v4() from base as b
 left join linked.asset as ls using(asset_cluster)
 where ls.base_owner is false;
+
+---- generate tags
+
+insert into tag ("userId",value)
+select id, name from public.user;
+
+---- insert generated tags
+
+insert into tag_asset ("assetsId","tagsId")
+select a.id, t.id from linked.asset as a
+left join tag as t on t."userId" = a.owner_id
+left join public.user as u on u.id = a.owner_id
+where a.base_owner is true and u.name = t.value;
 
 ---- create linked.tag
 
@@ -572,30 +587,32 @@ CREATE OR REPLACE FUNCTION linked.delete_asset_tag()
 RETURNS TRIGGER AS $$
 DECLARE
 	a_asset_cluster UUID;
+	a_tag_cluster UUID;
 BEGIN
-	IF EXISTS (SELECT 1 FROM linked.tag WHERE id = old."tagsId") THEN
-		IF exists (select 1 from linked.asset where id=old."assetsId" and base_owner is true) THEN
-			IF exists (select 1 from linked.tag_helper where id=old."assetsId" and now() - interval '1 second' <= updated) THEN
-				delete from linked.tag_helper where id=old."assetsId";
-			ELSE
-				select asset_cluster into a_asset_cluster from linked.asset where id = old."assetsId";
-				delete from asset
-				where id in (select id from linked.asset where asset_cluster = a_asset_cluster and base_owner is false);
-				delete from linked.asset
-				where id in (select id from linked.asset where asset_cluster = a_asset_cluster);
-				delete from linked.tag_helper where id=old."assetsId";
-			END IF;
+	IF new.type = 'DELETE' THEN
+		select tag_cluster into a_tag_cluster from linked.tag where id = new.tag_id;
+		select asset_cluster into a_asset_cluster from linked.asset where id = new.id;
+		delete from tag_asset 
+		where "tagsId" in (select id from linked.tag where tag_cluster = a_tag_cluster)
+		and "assetsId" in (select id from linked.asset where asset_cluster = a_asset_cluster);
+		IF exists (select 1 from linked.album where tag_id = new.tag_id) THEN
+			select asset_cluster into a_asset_cluster from linked.asset where id = new.id;
+			delete from asset
+			where id in (select id from linked.asset where asset_cluster = a_asset_cluster and base_owner is false);
+			delete from linked.asset
+			where id in (select id from linked.asset where asset_cluster = a_asset_cluster);
+			delete from linked.tag_helper where id=new.id;
 		END IF;
-	END IF;	    
+	END IF;    
 	RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
 
 ---- create trigger_delete_asset_tag
 
-create OR REPLACE trigger trigger_delete_asset_tag after delete
-on tag_asset for each row
-WHEN (pg_trigger_depth() = 0)
+create OR REPLACE trigger trigger_delete_asset_tag after update
+on linked.tag_helper for each row
+WHEN (pg_trigger_depth() = 1)
 execute function linked.delete_asset_tag();
 
 ---- create tag_asset helper table
@@ -603,10 +620,20 @@ execute function linked.delete_asset_tag();
 CREATE OR REPLACE FUNCTION linked.tag_helper_func()
 RETURNS TRIGGER AS $$
 BEGIN
-	if TG_OP = 'INSERT' THEN
-		insert into linked.tag_helper (id, updated)
-		select new."assetsId", now()
-		on conflict (id) do update set updated = now();
+	IF EXISTS (SELECT 1 FROM linked.tag WHERE id = new."tagsId" or id = old."tagsId") THEN
+		IF exists (select 1 from linked.asset where (id=new."assetsId" or id=old."assetsId") and base_owner is true) THEN
+			if TG_OP = 'INSERT' THEN
+				insert into linked.tag_helper (id,tag_id,type,updated)
+				select new."assetsId", new."tagsId", TG_OP, now()
+				on conflict (id) do update set updated = now(),tag_id = new."tagsId",type = TG_OP;
+			elseif TG_OP = 'DELETE' THEN
+				IF not exists (select 1 from linked.tag_helper where id=old."assetsId" and now() - interval '1 second' <= updated) THEN
+					insert into linked.tag_helper (id,tag_id,type,updated)
+					select old."assetsId", old."tagsId", TG_OP, now()
+					on conflict (id) do update set updated = now(),tag_id = old."tagsId",type = TG_OP;
+				END IF;
+			END IF;
+		END IF;
 	END IF;
 	RETURN NULL;
 END;
@@ -898,6 +925,104 @@ execute function linked.insert_linked_person();
 ---------------------------------------------------------------------------------------------------------
 
 
+
+---- create new tag
+
+CREATE OR REPLACE FUNCTION linked.link_new_tag()
+RETURNS TRIGGER AS $$
+BEGIN
+	IF NOT EXISTS (SELECT 1 FROM linked.album WHERE tag_id = new."tagsId") THEN
+		IF EXISTS (SELECT 1 FROM linked.asset WHERE id = new."assetsId" and base_owner is true) THEN
+			IF NOT EXISTS (SELECT 1 FROM linked.tag WHERE id = new."tagsId") THEN
+				--- new linked tag
+				with base as (select uuid_generate_v4() as tag_cluster,la.asset_cluster,la.owner_id,la.base_owner, false as parent_updated,t.value,ta."tagsId" as id from tag_asset as ta
+					left join linked.asset as la on ta."assetsId"=la.id
+					left join tag as t on ta."tagsId"=t.id
+					where ta."tagsId"=new."tagsId" and ta."assetsId"=new."assetsId"),
+				final_tag as (
+					select tag_cluster,owner_id,base_owner,parent_updated,value,id from base
+					union all
+					select b.tag_cluster,ls.owner_id,ls.base_owner,false,b.value,uuid_generate_v4() from base as b
+					left join linked.asset as ls using(asset_cluster)
+					where ls.owner_id!=b.owner_id),
+				joined AS (
+					SELECT 
+				    n.id as new_id,
+				    n.owner_id,
+				    null as parent_id,
+				    to_jsonb(t) AS data
+					FROM final_tag as m
+				  	left JOIN tag as t ON t.id = m.id
+				  	inner JOIN final_tag as n ON m.tag_cluster = n.tag_cluster
+					where m.id=new."tagsId" and n.id!=new."tagsId"),
+				patched AS (
+				  SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
+				  							'parentId', to_jsonb(parent_id),
+				  							'userId', to_jsonb(owner_id)) AS new_data FROM joined),
+				insert_tag as (
+					INSERT INTO tag
+					SELECT (jsonb_populate_record(NULL::tag, new_data)).*
+					FROM patched
+					ON CONFLICT (id) DO NOTHING
+					RETURNING 1),
+				--- into linked.tag
+				insert_linked_tag as (
+					insert into linked.tag (tag_cluster,owner_id,base_owner,parent_updated,value,id)
+					select tag_cluster,owner_id,base_owner,parent_updated,value,id from final_tag
+					on conflict (id) do nothing
+					RETURNING 1)
+				--- insert into tag_closure
+				INSERT INTO tag_closure (id_ancestor,id_descendant)
+				select id, id from final_tag 
+				on conflict (id_ancestor,id_descendant) do nothing;
+			END IF;
+			--- insert new asset
+			INSERT INTO tag_asset ("assetsId","tagsId")
+			with base as (select * from tag_asset as ta
+				left join linked.asset as a on a.id = ta."assetsId"
+				left join linked.tag as lt on ta."tagsId" = lt.id
+				where "tagsId" = new."tagsId" and "assetsId" = new."assetsId")
+			select a.id, lt.id from base as b
+			inner join linked.asset as a using(asset_cluster)
+			inner join linked.tag as lt using(tag_cluster)
+			where a.id != new."assetsId" and lt.id != new."tagsId" 
+			on conflict ("assetsId","tagsId") do nothing;
+			IF exists (select 1 from linked.tag where id = new."tagsId" and parent_updated is false) then
+				WITH RECURSIVE parents AS (
+					SELECT id, "parentId" FROM tag WHERE id = new."tagsId" 
+					UNION ALL
+					SELECT t.id, t."parentId" FROM tag t
+					JOIN parents d ON t.id = d."parentId"
+					where t."parentId" is not null),
+				base as (SELECT ltc.id, ltpc.id as parent_id FROM parents as p
+					left join linked.tag as lt on p.id = lt.id
+					left join linked.tag as ltc on lt.tag_cluster = ltc.tag_cluster
+					left join linked.tag as ltp on p."parentId" = ltp.id
+					left join linked.tag as ltpc on ltp.tag_cluster = ltpc.tag_cluster and ltc.owner_id = ltpc.owner_id
+					where p."parentId" is not null and ltc.id is not null and not exists (select 1 from parents where ltc.id=id)),
+				insert_closure as (INSERT INTO tag_closure (id_ancestor,id_descendant)
+					select id, case when parent_id is null then id else parent_id end from base 
+					on conflict (id_ancestor,id_descendant) do nothing
+					RETURNING 1),
+				parent_updated as (update linked.tag set parent_updated = true where id in (select id from base) RETURNING 1)
+				update tag as t
+				set "parentId" = parent_id
+				from base as b
+				where t.id = b.id;
+			END IF;
+		END IF;
+	END IF;
+	RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+---- create trigger_link_new_tag
+
+create OR REPLACE trigger trigger_link_new_tag after insert
+on tag_asset for each row
+WHEN (pg_trigger_depth() = 0)
+execute function linked.link_new_tag();
+
 ---- create new asset
 
 CREATE OR REPLACE FUNCTION linked.link_new_asset()
@@ -956,6 +1081,14 @@ BEGIN
 			RETURNING 1)
 			--- insert new tag_asset
 			INSERT INTO tag_asset ("assetsId","tagsId")
+			with base as (select lt.tag_cluster from final_table as ft
+			left join public.user as u on ft.owner_id = u.id
+			left join linked.tag as lt using(owner_id)
+			where ft.base_owner is true and u.name = lt.value)
+			select ft.id, t.id from final_table as ft
+			left join linked.tag as t using(owner_id)
+			where t.tag_cluster in (select tag_cluster from base)
+			union all
 			select ft.id,al.tag_id from final_table as ft
 			left join linked.album al using(album_cluster,owner_id)
 			on conflict ("assetsId","tagsId") do nothing;
