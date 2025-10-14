@@ -751,16 +751,22 @@ DECLARE
     a_cluster UUID;
 BEGIN
     IF EXISTS (SELECT 1 FROM linked.asset WHERE id = new.id and base_owner is true) THEN
-		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
-		update asset
-		set "fileModifiedAt" = NEW."fileModifiedAt",
-		"createdAt" = NEW."createdAt",
-		"isOffline" = NEW."isOffline",
-		"deletedAt" = NEW."deletedAt",
-		"localDateTime" = NEW."localDateTime",
-		visibility = NEW.visibility,
-		status = NEW.status
-		where id in (select id from linked.asset WHERE asset_cluster = a_cluster and id != new.id);
+		IF new.visibility = 'locked' THEN
+			SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
+			delete from asset
+			where id in (select id from linked.asset where asset_cluster = a_cluster and id != new.id);
+		ELSE
+			SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
+			update asset
+			set "fileModifiedAt" = NEW."fileModifiedAt",
+			"createdAt" = NEW."createdAt",
+			"isOffline" = NEW."isOffline",
+			"deletedAt" = NEW."deletedAt",
+			"localDateTime" = NEW."localDateTime",
+			visibility = NEW.visibility,
+			status = NEW.status
+			where id in (select id from linked.asset WHERE asset_cluster = a_cluster and id != new.id);
+		END IF;
 	END IF;
 	RETURN NULL;
 END;

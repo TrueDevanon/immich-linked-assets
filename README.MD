@@ -201,6 +201,8 @@ If the owner wants to change people on an asset and synchronize these updates:
 
    * Creating a **linked** asset is not an immediate action; if you try to put **linked** tag on a couple of assets at once, it will take some time to finish. (on my old slow hdd ~1.2 second per asset with total asset count ~230k)
 
+   * Memories are broken for **linked** assets for some reason.
+
 ---
 
 ## 💡 Synchronization Rules summary
@@ -208,7 +210,7 @@ If the owner wants to change people on an asset and synchronize these updates:
 | Action                                       | Owner | Non-Owner | Synced?                |
 | -------------------------------------------- | ----- | --------- | ---------------------- |
 | Edit metadata                                | ✅     | ✅         | ✅ (owner to others)         |
-| Add/remove/edit tags                              | ✅     | ✅         | ✅ (owner to others)         |
+| Add/remove/edit tags                         | ✅     | ✅         | ✅ (owner to others)         |
 | Delete asset                                 | ✅     | ✅         | ✅ (owner to others)         |
 | Remove `linked` tag                          | ✅     | ✅         | ✅ (owner to others) |
 | Modify people                                | ✅     | ✅         | ✅ (owner to others (only metadata))    |
