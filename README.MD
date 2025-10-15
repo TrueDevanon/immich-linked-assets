@@ -1,223 +1,183 @@
 # Immich Linked Assets
 
-This script enables **automatic synchronization and sharing of assets** between multiple [Immich](https://immich.app/) users through a **tag-based linking system**.
-It allows users to share photos, albums, people, and metadata seamlessly across connected accounts.
+A robust SQL-based automation tool for **synchronizing and sharing assets** across multiple [Immich](https://immich.app/) users using a **tag-driven linking system**. It allows seamless cloning of photos, albums, tags, and people metadata directly within the Immich database.
 
 ---
 
-### Current tested Immich version: **v2.0.1**
+### ✅ Tested Immich version: **v2.0.1**
 
 ---
 
 ## 🚀 Overview
 
-The synchronization system is based on the **`linked` tag**.
-When an asset is tagged as `linked`, it will be **cloned** and synchronized among all users connected through a **linked album**.
+Immich Linked Assets enables collaborative synchronization based on a special `linked` tag. When this tag is applied to an asset, it is automatically **cloned and synchronized** across all connected users.
 
 ---
 
-## ⚙️ Initial Setup
+## 🧩 How It Works
 
-0. **Check supported version of Immich**
+The system operates in two main steps:
 
-1. **Create backup**
+1. **Database Schema Extension** — Adds new structures to manage linked assets.
+2. **Database Triggers** — Automatically handles cloning and syncing in real-time.
 
-   * Immich is in active development, and any new update can possibly break a script.
+### On First Run
 
-2. **Create a “linked album”**
+* All assets with the `linked` tag are cloned for all participating users.
+* The following are included in the cloning process:
 
-   * In Immich, create a new album that will act as your *linked album*. Title must be **linked album**.
-   * In the album’s description, specify the name of the tag that will be used as the `linked` tag.
-   * Share this album with other participants who will exchange assets with you.
+  * Asset with metadata
+  * Asset tags
+  * Albums containing those assets
+  * People associated with those assets
+  * Data used for context search/face similarity
 
-3. **(Optional but recommended) Set your display name**
+### After Initial Setup
 
-   * In your Immich user settings, change your display name to your real name or nickname.
-   * When assets are cloned, two tags will appear automatically:
+* **Tag Trigger** — When an asset receives the `linked` tag, it triggers a clone for all linked users.
+* **Cloning Logic** — Each user gets a full, independent copy of the asset, including metadata, tags, and facial recognition data.
+* **Real-Time Sync** — Any changes by the asset’s owner (metadata, tags, deletions) are instantly propagated to all linked copies.
 
-     1. The shared `linked` tag
-     2. The tag containing the *owner’s name* (from system settings)
+> ⚠️ **Note:** If you add the `linked` tag *after* running the script, linked assets will still sync, but albums containing them will **not** be cloned.
 
-4. **Prepare your shared assets**
+---
 
-   * Before executing the script, create the `linked` tag for each participant.
-   * Assign this tag to all assets you want to share.
-   * Doing this **before** the script runs will greatly improve performance, since assets will be processed instantly rather than scanned dynamically.
+## ⚙️ Setup Guide
 
-> 💡 **Note:**
-> The linked album is **only required for the initial run** of the script.
-> Once the script finishes, you can safely delete this album — it’s no longer used in later operations.
+0. **Verify Immich version compatibility.**
 
-5. **Install the script**
+1. **Backup Your Database**
 
-   * Copy project files to any folder on your server.
+   ⚠️ The script modifies your Immich database directly. Back up your data before proceeding. Future Immich updates may affect compatibility.
 
-   > The following command works with the default Immich settings, replace dbname/username/container_name according to your settings.
+2. **Create a Linked Album**
 
-   ```
+   * In Immich, create a new album named `linked album`.
+   * In its description, specify the tag name that will act as the `linked` tag.
+   * Share this album with users who should participate in synchronization.
+
+3. **(Optional) Set a Display Name**
+
+   * Update your display name in Immich settings. This name is used as part of the automatic tagging system. Each `linked` asset will have:
+
+     1. A shared `linked` tag
+     2. A tag with the owner’s name
+
+4. **Prepare Shared Assets**
+
+   * Create the `linked` tag for each participant.
+   * Tag all assets you intend to share.
+   * Doing this before the first run improves performance significantly.
+
+> 💡 The linked album is only needed for the **initial setup**. After the script completes, it can be safely deleted.
+
+5. **Install the Script**
+
+   Run the following command (update with your database/container details):
+
+   ```bash
    docker exec -i immich_postgres psql --dbname=immich --username=postgres < ./immich_linked_asset.sql
    ```
 
+---
 
-## ❌ To remove script
+## ❌ Removing the Script
 
-   * Execute the following command on your server. It will remove all *linked* assets and triggers.
-   
-   > If you need to delete only triggers, then comment/remove all lines except ones that contain `drop trigger`
+To completely remove linked assets and triggers:
 
-    > The following command works with the default Immich settings, replace dbname/username/container_name according to your settings.
+```bash
+docker exec -i immich_postgres psql --dbname=immich --username=postgres < ./immich_delete_linked_asset.sql
+```
 
-   ```
-   docker exec -i immich_postgres psql --dbname=immich --username=postgres < ./immich_delete_linked_asset.sql
-   ```
-
-## 🔁 To update script
-
-   Basically needed only if a new version of Immich changes something in the database, and the triggers won't work anymore. I would try to fix the issue as soon as possible. Before updating, check the latest tested version at the top of this readme.
-
-   As a quick solution, you can delete triggers from the database, and when I fix the script, reinstall it.
-
-   * Execute the following command on your server. By this action you recreate only triggers, it won't change any of your *linked* assets.
-
-    > The following command works with the default Immich settings, replace dbname/username/container_name according to your settings.
-
-   ```
-   docker exec -i immich_postgres psql --dbname=immich --username=postgres < ./immich_update_linked_trigger.sql
-   ```
+> ⚠️ **Note:** If you only want to remove triggers, comment out or delete all lines except those containing `DROP TRIGGER`.
 
 ---
 
-## 🧩 How It Works 
+## 🔁 Updating the Script
 
-The script consists of two parts:
+If Immich updates cause trigger issues, reinstall only the triggers without affecting existing linked assets:
 
-1. Create a new scheme in the database and create **linked** assets.
-2. Create triggers on tables in the database to dynamically create new **linked** assets.
+```bash
+docker exec -i immich_postgres psql --dbname=immich --username=postgres < ./immich_update_linked_trigger.sql
+```
 
-When you first run the script:
-
-* All assets with the `linked` tag are **cloned** for all participants.
-* The following are also cloned:
-
-  * All tags on those assets
-  * Albums containing those assets
-  * People associated with those assets
-  * Assets that are used as a base for face to those people
-
-When you add the `linked` tag **after applying the script**, new linked assets (with tag/people) will be cloned, but albums that contain the asset **will not**.
+Always check the **tested version** listed at the top before applying updates.
 
 ---
 
 ## 🧭 Manual Linked Album Management
 
-After the initial synchronization, new albums will not be automatically cloned between users.
-To manually link or unlink albums, use the following commands in the **album description**:
+After the initial synchronization, new albums are **not** automatically cloned. You can manually link or unlink them using special commands inside the album description.
 
-### 🔗 To Create a Linked Album
+### 🔗 Create a Linked Album
 
-If the album owner wants to share an existing album with all connected users:
+Add this line to the album description and save:
 
-1. Edit the album description and add the line:
+```
+create linked album
+```
 
-   ```
-   create linked album
-   ```
-2. Save the changes.
+This will:
 
-After that:
+* Clone the album for all linked users.
+* Clone all assets within it that have the `linked` tag.
 
-* The album will appear for all other linked users.
-* All assets in it that have the `linked` tag will be cloned for everyone.
+### ❌ Remove a Linked Album
 
-### ❌ To Remove a Linked Album
+To unlink and delete an album from other users’ accounts, add this line to its description:
 
-If the owner wants to unlink and delete the album from other users’ accounts:
+```
+delete linked album
+```
 
-1. Edit the album description and add:
-
-   ```
-   delete linked album
-   ```
-2. Save the changes.
-
-After that:
-
-* The album will be removed from all linked users (except the owner).
+This will remove the album for all linked users except the owner.
 
 ---
 
-## 🔁 Synchronization Rules
+## 🔄 Synchronization & Permissions
 
-### 🟢 Asset Owners Can:
+The system follows an **owner/non-owner** model. The owner is the user who originally uploaded the asset.
 
-* Edit metadata — updates are instantly synced to all participants.
-* Add or remove tags — changes propagate to everyone.
-* Removing the `linked` tag from the asset will lead to deleting the asset from all linked users.
+### Owner Permissions (Changes Are Synced)
 
-### 🟡 Non-owners Can:
+* **Edit Metadata** — Synced to all users.
+* **Add/Remove Tags** — Synced to all users.
+* **Delete Item** — Deleted for everyone.
+* **Remove linked Tag** — Asset is unlinked and deleted for all others.
 
-* Edit metadata (local only — not synced).
-* Add or remove tags (local only — not synced).
+### Non-Owner Permissions (Local Only)
 
-### 🔵 Both Owners and Non-owners Can:
+* **Edit Metadata** — Local change; overwritten by owner updates.
+* **Add/Remove Tags** — Local change only.
+* **Delete Item** — Deletes locally; others are unaffected.
 
-* Add assets to the linked album.
-* Modify people associated with an asset (not synced automatically).
+### People/Face & Album Sync Details
 
-### 🟢 Album/Tag/People Owners Can:
+* **People Metadata** — Synced when edited by the owner.
+* **Linked Faces** — Not automatically synced; re-tag the asset to re-sync.
+* **Albums** — Any linked user can add linked assets to any linked album. However, the asset’s owner can remove that asset from any album across accounts, while non-owners can only remove it locally within their own account.
 
-* Edit all metadata — updates are instantly synced to all participants.
+### Summary Table
 
-### 🟡 Album/Tag/People Non-owners Can:
-
-* Edit all metadata, but only locally, and when the **owner** changes album/tag/people metadata, it overwrites non-owner changes.
-
----
-
-## 🧹 Deletion Rules
-
-* When the **owner** deletes an asset, album, or tag — it is deleted for **everyone**.
-* When a **non-owner** deletes an album — only their access is revoked (tags remain).
-
----
-
-## 🔄 Updating People Synchronization
-
-If the owner wants to change people on an asset and synchronize these updates:
-
-* Simply **remove** the `linked` tag, then **add it again**.
-* The script will detect the change and resynchronize the asset.
+| Action                   | Owner | Non-Owner | Synced?                      |   |
+| ------------------------ | ----- | --------- | --------------------------   | - |
+| Edit Asset Metadata      | ✅     | ✅         | ✅ (Owner overwrites)       |   |
+| Add/Remove Tags          | ✅     | ✅         | ✅ (Owner overwrites)       |   |
+| Modify People            | ✅     | ✅         | ❌ (Requires re-link)       |   |
+| Delete Asset             | ✅     | ✅         | ✅ (Owner deletes globally) |   |
+| Remove linked Tag        | ✅     | ✅         | ✅ (Owner unlink globally)  |   |
+| Edit Album Metadata      | ✅     | ✅         | ✅ (Owner overwrites)       |   |
+| Add/Remove Linked Asset  | ✅     | ✅         | ✅ (Owner deletes globally) |   |
+| Delete Album             | ✅     | ✅         | ✅ (Owner deletes globally) |   |
+| Link/Unlink Album        | ✅     | ❌         | ✅                          |   |
+| Edit Tag/Person Metadata | ✅     | ✅         | ✅ (Owner overwrites)       |   |
 
 ---
 
-## 😎 Pro tip
+## 😎 Pro Tips
 
-   * When someone is creating a **linked** asset that contains people who already exist in your account, you get duplicates. To prevent it, merge your **base** to **linked** people on every account. By this action, any new **linked** asset with these people wouldn't create a duplicate. But the method has a disadvantage: when the true owner of people changes metadata (name/birthday), it will propagate to everyone else.
-
-   * When you create **linked** asset with new people, the script would clone 2+ asset:
-      1. Original asset.
-      2. Assets that are linked to the people on the original asset (assets that contain face).
-   To avoid sharing assets that you won't share, go to those people and choose another "featured photo".
-
-   * Creating a **linked** asset is not an immediate action; if you try to put **linked** tag on a couple of assets at once, it will take some time to finish. (on my old slow hdd ~1.2 second per asset with total asset count ~230k)
-
-   * Memories are broken for **linked** assets for some reason.
+* To avoid duplicate people entries, merge your **base** to **linked** people across accounts. This ensures new linked assets reuse existing entities. (Note: owner metadata updates will propagate to everyone.)
+* Linking assets is not instant — expect ~1–2 seconds per asset on slower disks.
+* The Immich *Memories* feature currently does not work correctly with linked assets.
 
 ---
-
-## 💡 Synchronization Rules summary
-
-| Action                                       | Owner | Non-Owner | Synced?                |
-| -------------------------------------------- | ----- | --------- | ---------------------- |
-| Edit metadata                                | ✅     | ✅         | ✅ (owner to others)         |
-| Add/remove/edit tags                         | ✅     | ✅         | ✅ (owner to others)         |
-| Delete asset                                 | ✅     | ✅         | ✅ (owner to others)         |
-| Remove `linked` tag                          | ✅     | ✅         | ✅ (owner to others) |
-| Modify people                                | ✅     | ✅         | ✅ (owner to others (only metadata))    |
-| Modify album metadata                        | ✅     | ✅         | ✅ (owner to others)          |
-| Add to linked album                          | ✅     | ✅         | ✅ (only linked assets)  |
-| Delete album                                 | ✅     | ✅         | ✅ (owner to others)         |
-| Create/delete linked album (via description) | ✅     | ❌         | ✅ (owner only)         |
-
----
-
