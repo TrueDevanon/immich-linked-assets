@@ -4,7 +4,7 @@ A robust SQL-based automation tool for **synchronizing and sharing assets** acro
 
 ---
 
-### ✅ Tested Immich version: **v2.0.1**
+### ✅ Tested Immich version: **v2.1.0**
 
 ---
 
@@ -35,8 +35,8 @@ The system operates in two main steps:
 ### After Initial Setup
 
 * **Tag Trigger** — When an asset receives the `linked` tag, it triggers a clone for all linked users.
-* **Cloning Logic** — Each user gets a full, independent copy of the asset, including metadata, tags, and facial recognition data.
-* **Real-Time Sync** — Any changes by the asset’s owner (metadata, tags, deletions) are instantly propagated to all linked copies.
+* **Cloning Logic** — Each user gets a full, copy of the asset, including metadata, tags, and facial recognition data.
+* **Real-Time Sync** — Any changes (metadata, tags) are instantly propagated to all linked copies.
 
 > ⚠️ **Note:** If you add the `linked` tag *after* running the script, linked assets will still sync, but albums containing them will **not** be cloned.
 
@@ -136,20 +136,29 @@ This will remove the album for all linked users except the owner.
 
 ## 🔄 Synchronization & Permissions
 
-The system follows an **owner/non-owner** model. The owner is the user who originally uploaded the asset.
+The system operates on an **owner/non-owner** model. The owner is the user who uploaded an asset, created an album, person, or tag. Any changes made by the owner will automatically be reflected in the system for others (except for asset metadata).
 
 ### Owner Permissions (Changes Are Synced)
 
-* **Edit Metadata** — Synced to all users.
-* **Add/Remove Tags** — Synced to all users.
-* **Delete Item** — Deleted for everyone.
+* **Trash Item** — Trash for owner, but **archive** for other (All linked copies are connected to the same file, so anyone can delete it from the trash permanently).
+* **Permanently delete Item** — Deleted for everyone.
 * **Remove linked Tag** — Asset is unlinked and deleted for all others.
+* **Edit person metadata** — Changes will propagate to others.
+* **Edit album metadata** — Changes will propagate to others.
+* **Edit tag metadata** — Changes will propagate to others.
+* **Create stack** — Changes will propagate to others.
 
-### Non-Owner Permissions (Local Only)
+### Non-Owner Permissions
 
-* **Edit Metadata** — Local change; overwritten by owner updates.
-* **Add/Remove Tags** — Local change only.
-* **Delete Item** — Deletes locally; others are unaffected.
+* **Trash linked Item** — **Linked** asset will be **archived**. (Local Only)
+* **Add to albums** - Add or remove to linked and non-linked albums.
+* **Unstack linked assets** - Unstack linked assets (Local Only).
+
+### Owner and Non-Owner
+
+* **Edit asset Metadata** — Synced to all users (instant).
+* **Add or Remove Tags** — Synced to all users (instant).
+* **Modify people** - Add, change, or delete people. (Local Only)
 
 ### People/Face & Album Sync Details
 
@@ -159,18 +168,18 @@ The system follows an **owner/non-owner** model. The owner is the user who origi
 
 ### Summary Table
 
-| Action                   | Owner | Non-Owner | Synced?                      |   |
-| ------------------------ | ----- | --------- | --------------------------   | - |
-| Edit Asset Metadata      | ✅     | ✅         | ✅ (Owner overwrites)       |   |
-| Add/Remove Tags          | ✅     | ✅         | ✅ (Owner overwrites)       |   |
-| Modify People            | ✅     | ✅         | ❌ (Requires re-link)       |   |
-| Delete Asset             | ✅     | ✅         | ✅ (Owner deletes globally) |   |
-| Remove linked Tag        | ✅     | ✅         | ✅ (Owner unlink globally)  |   |
-| Edit Album Metadata      | ✅     | ✅         | ✅ (Owner overwrites)       |   |
-| Add/Remove Linked Asset  | ✅     | ✅         | ✅ (Owner deletes globally) |   |
-| Delete Album             | ✅     | ✅         | ✅ (Owner deletes globally) |   |
-| Link/Unlink Album        | ✅     | ❌         | ✅                          |   |
-| Edit Tag/Person Metadata | ✅     | ✅         | ✅ (Owner overwrites)       |   |
+| Action                   | Owner | Non-Owner | Synced?                      |   
+| ------------------------ | ----- | --------- | --------------------------   | 
+| Edit Asset Metadata      | ✅     | ✅         | ✅                          |   
+| Add or Remove Tags       | ✅     | ✅         | ✅                          |   
+| Modify People            | ✅     | ✅         | ❌ (Requires re-link)       |   
+| Delete Asset             | ✅     | ✅         | ✅ (Owner deletes globally) |   
+| Remove linked Tag        | ✅     | ✅         | ✅ (Owner unlink globally)  |   
+| Edit Album Metadata      | ✅     | ✅         | ✅                          |   
+| Add or Remove Linked Asset | ✅     | ✅         | ✅ (Owner deletes globally) |   
+| Delete Album             | ✅     | ✅         | ✅ (Owner deletes globally) |   
+| Link or Unlink Album        | ✅     | ❌         | ✅                          |   
+| Edit Tag or Person Metadata | ✅     | ✅         | ✅ (Owner overwrites)       |  
 
 ---
 
@@ -179,5 +188,6 @@ The system follows an **owner/non-owner** model. The owner is the user who origi
 * To avoid duplicate people entries, merge your **base** to **linked** people across accounts. This ensures new linked assets reuse existing entities. (Note: owner metadata updates will propagate to everyone.)
 * Linking assets is not instant — expect ~1–2 seconds per asset on slower disks.
 * The Immich *Memories* feature currently does not work correctly with linked assets.
+* If you create a stack of assets, only **linked** assets will be cloned
 
 ---

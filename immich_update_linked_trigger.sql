@@ -70,6 +70,8 @@ BEGIN
 		SELECT tag_cluster INTO t_cluster FROM linked.tag WHERE id = old.id;
 		delete from tag
 		where id in (select id from linked.tag where tag_cluster = t_cluster);
+	ELSIF EXISTS (select 1 from linked.album where tag_id = old.id) THEN
+		RETURN NULL;
 	else
 		delete from tag where id = old.id;
 	END IF;
@@ -173,6 +175,31 @@ create OR REPLACE trigger trigger_delete_shared_album before delete
 on album for each row
 WHEN (pg_trigger_depth() = 0)
 execute function linked.delete_shared_album();
+
+---- delete linked stack
+
+CREATE OR REPLACE FUNCTION linked.delete_linked_stack()
+RETURNS TRIGGER AS $$
+DECLARE
+    s_cluster UUID;
+BEGIN
+    IF EXISTS (SELECT 1 FROM linked.stack WHERE id = old.id and base_owner is true) THEN
+		SELECT stack_cluster INTO s_cluster FROM linked.stack WHERE id = old.id;
+		delete from stack
+		where id in (select id from linked.stack where stack_cluster = s_cluster);
+	else
+		delete from stack where id = old.id;
+	END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+---- trigger for delete linked stack
+
+create OR REPLACE trigger trigger_delete_linked_stack before delete
+on stack for each row
+WHEN (pg_trigger_depth() = 0)
+execute function linked.delete_linked_stack();
 
 
 ---------------------------------------------------------------------------------------------------------
@@ -297,18 +324,47 @@ RETURNS trigger
 AS $$
 DECLARE
     a_cluster UUID;
+	s_cluster UUID;
 BEGIN
     IF EXISTS (SELECT 1 FROM linked.asset WHERE id = new.id and base_owner is true) THEN
-		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
-		update asset
-		set "fileModifiedAt" = NEW."fileModifiedAt",
-		"createdAt" = NEW."createdAt",
-		"isOffline" = NEW."isOffline",
-		"deletedAt" = NEW."deletedAt",
-		"localDateTime" = NEW."localDateTime",
-		visibility = NEW.visibility,
-		status = NEW.status
-		where id in (select id from linked.asset WHERE asset_cluster = a_cluster and id != new.id);
+		IF new.visibility = 'locked' THEN
+			SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
+			delete from asset
+			where id in (select id from linked.asset where asset_cluster = a_cluster and id != new.id);
+		ELSE
+			SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
+			IF new."stackId" is not null THEN
+				SELECT stack_cluster INTO s_cluster FROM linked.stack WHERE id = new."stackId";
+			END IF;
+			IF old."stackId" is null and new."stackId" is not null and s_cluster is null THEN
+				with base as (select a.asset_cluster as stack_cluster, aa.id as asset_id, aa.owner_id, aa.base_owner, coalesce(lss.id,s.id,uuid_generate_v4()) as id from linked.album as la
+					left join stack as s on la.owner_id = s."ownerId" and s.id = new."stackId"
+					left join linked.stack as ls on ls.id = new."stackId"
+					left join linked.stack as lss on ls.stack_cluster = lss.stack_cluster and lss.owner_id = la.owner_id
+					left join linked.asset as a on a.id = new.id
+					left join linked.asset as aa on a.asset_cluster = aa.asset_cluster and aa.owner_id = la.owner_id),
+				insert_stack as (INSERT INTO stack (id, "primaryAssetId", "ownerId")
+					select id,asset_id,owner_id from base where base_owner is false
+					ON CONFLICT (id) DO NOTHING
+					RETURNING 1)
+				insert into linked.stack (stack_cluster,owner_id,base_owner,id)
+				select stack_cluster,owner_id,base_owner,id from base
+				ON CONFLICT (id) DO NOTHING;
+				SELECT stack_cluster INTO s_cluster FROM linked.stack WHERE id = new."stackId";
+			END IF;
+			update asset as a
+			set "fileModifiedAt" = NEW."fileModifiedAt",
+			"createdAt" = NEW."createdAt",
+			"isOffline" = NEW."isOffline",
+			"deletedAt" = NEW."deletedAt",
+			"localDateTime" = NEW."localDateTime",
+			visibility = NEW.visibility,
+			status = NEW.status,
+			"stackId" = ls.id
+			from linked.stack as ls
+			where ls.stack_cluster = s_cluster and ls.owner_id = a."ownerId"
+ 				and a.id in (select id from linked.asset WHERE asset_cluster = a_cluster and id != new.id);
+		END IF;
 	END IF;
 	RETURN NULL;
 END;
@@ -414,7 +470,7 @@ AS $$
 DECLARE
     a_face_cluster UUID;
 BEGIN
-	if new.base_owner is true THEN
+	if new.base_owner is true and new.person_id is not null THEN
 		--- person already in linked database
 		select face_cluster into a_face_cluster from linked.asset_face where face_cluster != new.face_cluster and person_id = new.person_id limit 1;
 		IF a_face_cluster is not null THEN
@@ -441,7 +497,7 @@ BEGIN
 			set person_id = faf.person_id
 			from final_asset_face as faf
 			where af.id = faf.id;
-		ELSIF EXISTS (SELECT 1 FROM linked.asset WHERE id = (select "assetId" from asset_face where id = (select "faceAssetId" from person where id = new.person_id))) and new.base_owner is true THEN
+		ELSE
 			--- create person
 			with base as (select af.asset_cluster,af.face_cluster,af.id as face_asset_id,af.owner_id,af.base_owner,af.asset_id,af.person_id as id from linked.asset_face as af
 				where af.id=new.id),
@@ -455,7 +511,7 @@ BEGIN
 			joined AS (SELECT
 			    n.id as new_id,
 			    n.owner_id,
-			    n.face_asset_id,
+			    coalesce(n.face_asset_id,n.id) as face_asset_id,
 			    to_jsonb(t) AS data
 			  FROM final_person m
 				inner JOIN person t ON t.id = m.id
@@ -634,6 +690,7 @@ RETURNS TRIGGER AS $$
 DECLARE
     a_asset_cluster uuid;
 	a_album_cluster uuid;
+	a_stack_cluster uuid;
 BEGIN
     IF EXISTS (SELECT 1 FROM linked.album WHERE tag_id = new."tagsId") THEN
 		IF NOT EXISTS (SELECT 1 FROM linked.asset WHERE id = new."assetsId") THEN
@@ -642,26 +699,15 @@ BEGIN
 	        INTO a_asset_cluster, a_album_cluster
 	        FROM linked.album a
 	        WHERE a.tag_id = new."tagsId";
+			select ls.stack_cluster into a_stack_cluster from asset as a
+			inner join linked.stack as ls on ls.id = a."stackId"
+			where a.id = new."assetsId";
 			---
-			with asset_filter as (select a_album_cluster as album_cluster, a_asset_cluster as asset_cluster, a."ownerId" as owner_id, true as base_owner, a.id from asset as a where a.id=NEW."assetsId"),
-			prepare_additional_faces as (select distinct p."faceAssetId", a.album_cluster, a.owner_id from asset_filter as a
-				left join asset_file as af on a.id=af."assetId"
-				left join asset_face as afa on afa."assetId"=a.id
-				left join person as p on p.id=afa."personId"
-				where afa."personId" is not null and not exists (select 1 from linked.asset_face where person_id=afa."personId")),
-			additional_faces as (select distinct on (a.id) af.album_cluster,uuid_generate_v4() as asset_cluster,a."ownerId" as owner_id,true as base_owner,a.id from asset as a
-				inner join (select distinct "assetId",album_cluster from asset_face as af
-					inner join prepare_additional_faces as aaf on af.id=aaf."faceAssetId") as af
-				on af."assetId"=a.id
-				left join linked.album as b on b.album_cluster=af.album_cluster
-				where not exists (select 1 from linked.asset where id = af."assetId")
-				and not exists (select 1 from asset_filter where id=a.id)),
-			prepare_final_table as (select * from asset_filter
-				union all
-				select * from additional_faces),
-			final_table as (select b.album_cluster,a.asset_cluster,b.owner_id,coalesce(aa.base_owner,false) as base_owner,coalesce(aa.id,uuid_generate_v4()) as id from prepare_final_table as a
+			with asset_filter as (select a_album_cluster as album_cluster, a_asset_cluster as asset_cluster, a."ownerId" as owner_id, true as base_owner, "stackId", a.id from asset as a where a.id=NEW."assetsId"),
+			final_table as (select b.album_cluster,a.asset_cluster,b.owner_id,coalesce(aa.base_owner,false) as base_owner, (case when a."stackId" is null then null else coalesce(aa."stackId",ls.id,uuid_generate_v4()) end) as stack_id, coalesce(aa.id,uuid_generate_v4()) as id from asset_filter as a
 				left join linked.album as b on b.album_cluster = a.album_cluster
-				left join prepare_final_table as aa on b.owner_id = aa.owner_id and aa.asset_cluster = a.asset_cluster),
+				left join linked.stack as ls on ls.stack_cluster = a_stack_cluster and ls.owner_id = b.owner_id
+				left join asset_filter as aa on b.owner_id = aa.owner_id and aa.asset_cluster = a.asset_cluster),
 			joined AS (SELECT 
 				n.id as new_id,
 				n.owner_id,
@@ -671,6 +717,8 @@ BEGIN
 			    left JOIN final_table n ON m.asset_cluster = n.asset_cluster
 			    where m.base_owner is true and n.base_owner is false),
 			patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
+			  							'stackId', null,
+										'duplicateId', null,
 			  							'ownerId', to_jsonb(owner_id)) AS new_data FROM joined),
 			insert_asset as (INSERT INTO asset
 				SELECT (jsonb_populate_record(NULL::asset, new_data)).* FROM patched
@@ -678,9 +726,29 @@ BEGIN
 				RETURNING 1),
 			--- insert into linked
 			insert_linked_asset as (insert into linked.asset (album_cluster, asset_cluster, owner_id, base_owner, id)
-			select album_cluster, asset_cluster, owner_id, base_owner, id from final_table
-			on conflict (id) do nothing
-			RETURNING 1)
+				select album_cluster, asset_cluster, owner_id, base_owner, id from final_table
+				on conflict (id) do nothing
+				RETURNING 1),
+			insert_stack as (insert into stack (id, "primaryAssetId", "ownerId")
+				with aaa as (select la.asset_cluster from final_table as ft
+					inner join stack as s on ft.stack_id = s.id
+					inner join linked.asset as la on s."primaryAssetId" = la.id
+					where ft.base_owner is true)
+				select ft.stack_id, coalesce(a.id,ft.id), ft.owner_id from final_table as ft
+				left join linked.asset as a on a.asset_cluster in (select asset_cluster from aaa) and ft.owner_id = a.owner_id
+				where ft.base_owner is false and ft.stack_id is not null
+				on conflict (id) do nothing
+				RETURNING 1),
+			insert_linked_stack as (insert into linked.stack (stack_cluster, owner_id, base_owner, id)
+				select asset_cluster, owner_id, base_owner, stack_id from final_table
+				where stack_id is not null
+				on conflict (id) do nothing
+				RETURNING 1),
+			update_stack_asset as (update asset as a 
+				set "stackId" = ft.stack_id
+				from final_table as ft
+				where a.id = ft.id and ft.base_owner is false
+				RETURNING 1)
 			--- insert new tag_asset
 			INSERT INTO tag_asset ("assetsId","tagsId")
 			with base as (select lt.tag_cluster from final_table as ft

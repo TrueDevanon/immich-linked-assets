@@ -26,9 +26,13 @@ drop trigger if exists trigger_update_linked_album on album;
 drop trigger if exists trigger_link_new_album on album_asset;
 drop trigger if exists trigger_update_linked_tag on tag;
 drop trigger if exists trigger_update_linked_person on person;
+drop trigger if exists trigger_delete_linked_stack on stack;
+drop trigger if exists trigger_update_stack_primary_asset on stack;
 
 ---- delete cloned asset 
-
+delete from stack s
+using linked.stack ls
+where s.id = ls.id and ls.base_owner is false;
 DELETE FROM asset a
 USING linked.asset la
 WHERE a.id = la.id AND la.base_owner is false;
