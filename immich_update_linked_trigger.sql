@@ -90,24 +90,21 @@ execute function linked.delete_linked_tag();
 
 CREATE OR REPLACE FUNCTION linked.delete_asset_tag()
 RETURNS TRIGGER AS $$
-DECLARE
-	a_asset_cluster UUID;
-	a_tag_cluster UUID;
 BEGIN
-	IF new.type = 'DELETE' THEN
-		select tag_cluster into a_tag_cluster from linked.tag where id = new.tag_id;
-		select asset_cluster into a_asset_cluster from linked.asset where id = new.id;
-		delete from tag_asset
-		where "tagsId" in (select id from linked.tag where tag_cluster = a_tag_cluster)
-		and "assetsId" in (select id from linked.asset where asset_cluster = a_asset_cluster);
-		IF exists (select 1 from linked.album where tag_id = new.tag_id) THEN
-			select asset_cluster into a_asset_cluster from linked.asset where id = new.id;
-			delete from asset
-			where id in (select id from linked.asset where asset_cluster = a_asset_cluster and base_owner is false);
-			delete from linked.asset
-			where id in (select id from linked.asset where asset_cluster = a_asset_cluster);
-			delete from linked.tag_helper where id=new.id;
+	IF new.status = true THEN
+		IF exists (select 1 from linked.album as a where a.tag_id = new.tag_id) THEN
+			IF new.base_owner is true THEN
+				delete from asset
+				where id in (select id from linked.asset where asset_cluster = new.asset_cluster and base_owner is false);
+				delete from linked.asset
+				where id in (select id from linked.asset where asset_cluster = new.asset_cluster);
+				delete from linked.tag_helper where asset_cluster = new.asset_cluster and tag_cluster = new.tag_cluster;
+			END IF;
+			RETURN NULL;
 		END IF;
+		delete from tag_asset
+		where "tagsId" in (select id from linked.tag where tag_cluster = new.tag_cluster)
+		and "assetsId" in (select id from linked.asset where asset_cluster = new.asset_cluster);
 	END IF;
 	RETURN NULL;
 END;
@@ -124,19 +121,30 @@ execute function linked.delete_asset_tag();
 
 CREATE OR REPLACE FUNCTION linked.tag_helper_func()
 RETURNS TRIGGER AS $$
+DECLARE
+	a_asset_cluster UUID;
+	a_tag_cluster UUID;
+	a_base_owner bool;
 BEGIN
+	IF TG_OP = 'INSERT' THEN
+		delete from linked.tag_helper where asset_cluster = (select asset_cluster from linked.asset where id = new."assetsId");
+		RETURN NULL;
+	END IF;
 	IF EXISTS (SELECT 1 FROM linked.tag WHERE id = new."tagsId" or id = old."tagsId") THEN
-		IF exists (select 1 from linked.asset where (id = new."assetsId" or id = old."assetsId") and base_owner is true) THEN
-			if TG_OP = 'INSERT' THEN
-				insert into linked.tag_helper (id, tag_id, type, updated)
-				select new."assetsId", new."tagsId", TG_OP, now()
-				on conflict (id) do update set updated = now(), tag_id = new."tagsId", type = TG_OP;
-			ELSIF TG_OP = 'DELETE' THEN
-				IF not exists (select 1 from linked.tag_helper where id = old."assetsId" and now() - interval '0.5 second' <= updated) THEN
-					insert into linked.tag_helper (id, tag_id, type, updated)
-					select old."assetsId", old."tagsId", TG_OP, now()
-					on conflict (id) do update set updated = now(), tag_id = old."tagsId", type = TG_OP;
-				END IF;
+		select base_owner into a_base_owner from linked.asset where id = new."assetsId" or id = old."assetsId";
+		IF a_base_owner is not null THEN
+			select tag_cluster into a_tag_cluster from linked.tag where id = new."tagsId" or id = old."tagsId";
+			select asset_cluster into a_asset_cluster from linked.asset where id = new."assetsId" or id = old."assetsId";
+			IF exists (select 1 from linked.tag_helper where asset_cluster = a_asset_cluster) THEN
+				update linked.tag_helper as th
+				set status = true
+				where th.status is false and th.asset_cluster = a_asset_cluster and th.tag_cluster = a_tag_cluster;
+			ELSE
+				insert into linked.tag_helper (asset_cluster, tag_cluster, base_owner, tag_id, status)
+				select a_asset_cluster, a_tag_cluster, a_base_owner, old."tagsId", false;
+				update linked.tag_helper as th
+				set status = true
+				where th.status is false and th.asset_cluster = a_asset_cluster and th.tag_cluster = a_tag_cluster;
 			END IF;
 		END IF;
 	END IF;
@@ -233,6 +241,37 @@ create OR REPLACE trigger trigger_update_linked_tag after update
 on tag for each row
 WHEN (pg_trigger_depth() = 0)
 execute function linked.update_linked_tag();
+
+---- create update stack primary asset
+
+CREATE OR REPLACE FUNCTION linked.update_stack_primary_asset()
+RETURNS trigger
+AS $$
+DECLARE
+    s_cluster UUID;
+	a_cluster UUID;
+BEGIN
+    IF EXISTS (SELECT 1 FROM linked.stack WHERE id = new.id and base_owner is true) THEN
+		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new."primaryAssetId";
+		IF a_cluster is not null then
+			SELECT stack_cluster INTO s_cluster FROM linked.stack WHERE id = new.id;
+			update stack as s
+			set "primaryAssetId" = a.id
+			from linked.asset as a
+			where a.asset_cluster = a_cluster and a.owner_id = s."ownerId"
+			and s.id in (select id from linked.stack WHERE stack_cluster = s_cluster and id != new.id);
+		END IF;
+	END IF;
+	RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+---- trigger for update tag recursive
+
+create OR REPLACE trigger trigger_update_stack_primary_asset after update
+on stack for each row
+WHEN (pg_trigger_depth() = 0)
+execute function linked.update_stack_primary_asset();
 
 ---- create update albums
 
@@ -331,6 +370,16 @@ BEGIN
 			SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
 			delete from asset
 			where id in (select id from linked.asset where asset_cluster = a_cluster and id != new.id);
+		ELSIF new.status = 'trashed' THEN
+			SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
+			update asset as a
+			set visibility = 'archive', status = 'active', "deletedAt" = null
+			where id in (select id from linked.asset where asset_cluster = a_cluster and id != new.id);
+		ELSIF old.status = 'trashed' and new.status = 'active' THEN
+			SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
+			update asset as a
+			set visibility = 'timeline', status = 'active', "deletedAt" = null
+			where id in (select id from linked.asset where asset_cluster = a_cluster and id != new.id);
 		ELSE
 			SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
 			IF new."stackId" is not null THEN
@@ -350,21 +399,22 @@ BEGIN
 				insert into linked.stack (stack_cluster,owner_id,base_owner,id)
 				select stack_cluster,owner_id,base_owner,id from base
 				ON CONFLICT (id) DO NOTHING;
-				SELECT stack_cluster INTO s_cluster FROM linked.stack WHERE id = new."stackId";
 			END IF;
+			SELECT stack_cluster INTO s_cluster FROM linked.stack WHERE id = new."stackId";
 			update asset as a
 			set "fileModifiedAt" = NEW."fileModifiedAt",
 			"createdAt" = NEW."createdAt",
 			"isOffline" = NEW."isOffline",
-			"deletedAt" = NEW."deletedAt",
 			"localDateTime" = NEW."localDateTime",
-			visibility = NEW.visibility,
-			status = NEW.status,
-			"stackId" = ls.id
+			"stackId" = (CASE WHEN s_cluster IS NULL THEN NULL ELSE ls.id end)
 			from linked.stack as ls
-			where ls.stack_cluster = s_cluster and ls.owner_id = a."ownerId"
+			where (s_cluster IS NULL OR (ls.stack_cluster = s_cluster and ls.owner_id = a."ownerId"))
  				and a.id in (select id from linked.asset WHERE asset_cluster = a_cluster and id != new.id);
 		END IF;
+	ELSIF EXISTS (SELECT 1 FROM linked.asset WHERE id = new.id and base_owner is false and new.status = 'trashed') THEN
+		update asset as a
+		set visibility = 'archive', status = 'active', "deletedAt" = null
+		where id = new.id;
 	END IF;
 	RETURN NULL;
 END;
@@ -380,7 +430,7 @@ execute function linked.update_linked_asset();
 ---- create update person metadata
 
 CREATE OR REPLACE FUNCTION linked.update_linked_person()
- RETURNS trigger
+RETURNS trigger
 AS $$
 DECLARE
     f_cluster UUID;
@@ -408,7 +458,7 @@ execute function linked.update_linked_person();
 ---- create update asset_face
 
 CREATE OR REPLACE FUNCTION linked.sync_asset_face()
- RETURNS trigger
+RETURNS trigger
 AS $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM linked.asset_face WHERE person_id = old."personId") and old."personId" != new."personId" THEN
@@ -430,12 +480,12 @@ execute function linked.sync_asset_face();
 ---- create update asset metadata
 
 CREATE OR REPLACE FUNCTION linked.update_linked_asset_exif()
- RETURNS trigger
+RETURNS trigger
 AS $$
 DECLARE
     a_cluster UUID;
 BEGIN
-    IF EXISTS (SELECT 1 FROM linked.asset WHERE id = new."assetId" and base_owner is true) THEN
+    IF EXISTS (SELECT 1 FROM linked.asset WHERE id = new."assetId") THEN
 		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new."assetId";
 		update asset_exif
 		set orientation = NEW.orientation,
@@ -449,7 +499,7 @@ BEGIN
 		description = NEW.description,
 		"timeZone" = NEW."timeZone",
 		rating = NEW.rating
-		where "assetId" in (select id from linked.asset WHERE asset_cluster = a_cluster and base_owner is false);
+		where "assetId" in (select id from linked.asset WHERE asset_cluster = a_cluster and id != new."assetId");
 	END IF;
 	RETURN NULL;
 END;
@@ -594,7 +644,7 @@ CREATE OR REPLACE FUNCTION linked.link_new_tag()
 RETURNS TRIGGER AS $$
 BEGIN
 	IF NOT EXISTS (SELECT 1 FROM linked.album WHERE tag_id = new."tagsId") THEN
-		IF EXISTS (SELECT 1 FROM linked.asset WHERE id = new."assetsId" and base_owner is true) THEN
+		IF EXISTS (SELECT 1 FROM linked.asset WHERE id = new."assetsId") THEN
 			IF NOT EXISTS (SELECT 1 FROM linked.tag WHERE id = new."tagsId") THEN
 				--- new linked tag
 				with base as (select uuid_generate_v4() as tag_cluster,la.asset_cluster,la.owner_id,la.base_owner,false as parent_updated,t.value,ta."tagsId" as id from tag_asset as ta
@@ -735,7 +785,7 @@ BEGIN
 					inner join linked.asset as la on s."primaryAssetId" = la.id
 					where ft.base_owner is true)
 				select ft.stack_id, coalesce(a.id,ft.id), ft.owner_id from final_table as ft
-				left join linked.asset as a on a.asset_cluster in (select asset_cluster from aaa) and ft.owner_id = a.owner_id
+				left join linked.asset as a on a.asset_cluster = (select asset_cluster from aaa) and ft.owner_id = a.owner_id
 				where ft.base_owner is false and ft.stack_id is not null
 				on conflict (id) do nothing
 				RETURNING 1),

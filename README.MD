@@ -48,7 +48,7 @@ The system operates in two main steps:
 
 1. **Backup Your Database**
 
-   ⚠️ The script modifies your Immich database directly. Back up your data before proceeding. Future Immich updates may affect compatibility.
+   ⚠️ The script modifies your Immich database directly. Backup your data before proceeding. Future Immich updates may affect compatibility.
 
 2. **Create a Linked Album**
 
