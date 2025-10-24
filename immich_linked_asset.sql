@@ -924,7 +924,7 @@ execute function linked.update_linked_asset();
 ---- create update person metadata
 
 CREATE OR REPLACE FUNCTION linked.update_linked_person()
- RETURNS trigger
+RETURNS trigger
 AS $$
 DECLARE
     f_cluster UUID;
@@ -952,7 +952,7 @@ execute function linked.update_linked_person();
 ---- create update asset_face
 
 CREATE OR REPLACE FUNCTION linked.sync_asset_face()
- RETURNS trigger
+RETURNS trigger
 AS $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM linked.asset_face WHERE person_id = old."personId") and old."personId" != new."personId" THEN
@@ -974,7 +974,7 @@ execute function linked.sync_asset_face();
 ---- create update asset metadata
 
 CREATE OR REPLACE FUNCTION linked.update_linked_asset_exif()
- RETURNS trigger
+RETURNS trigger
 AS $$
 DECLARE
     a_cluster UUID;

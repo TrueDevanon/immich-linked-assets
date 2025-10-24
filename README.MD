@@ -1,6 +1,6 @@
 # Immich Linked Assets
 
-A robust SQL-based automation tool for **synchronizing and sharing assets** across multiple [Immich](https://immich.app/) users using a **tag-driven linking system**. It allows seamless cloning of photos, albums, tags, and people metadata directly within the Immich database.
+A robust SQL-based automation tool for **synchronizing and sharing assets** across multiple [Immich](https://immich.app/) users using a **tag-driven linking system**. It allows seamless cloning of photos, albums, tags, and people metadata directly within the Immich database (without duplicates on the hard drive). 
 
 ---
 
@@ -158,7 +158,7 @@ The system operates on an **owner/non-owner** model. The owner is the user who u
 
 * **Edit asset Metadata** — Synced to all users (instant).
 * **Add or Remove Tags** — Synced to all users (instant).
-* **Modify people** - Add, change, or delete people. (Local Only)
+* **Modify people** - Add, change, or delete people. (Local for non-owner)
 
 ### People/Face & Album Sync Details
 
@@ -175,11 +175,11 @@ The system operates on an **owner/non-owner** model. The owner is the user who u
 | Modify People            | ✅     | ✅         | ❌ (Requires re-link)       |   
 | Delete Asset             | ✅     | ✅         | ✅ (Owner deletes globally) |   
 | Remove linked Tag        | ✅     | ✅         | ✅ (Owner unlink globally)  |   
-| Edit Album Metadata      | ✅     | ✅         | ✅                          |   
-| Add or Remove Linked Asset | ✅     | ✅         | ✅ (Owner deletes globally) |   
+| Edit Album Metadata      | ✅     | ❌         | ✅ (Owner overwrites)       |   
+| Add or Remove Linked Asset | ✅     | ✅       | ✅ (Owner deletes globally) |   
 | Delete Album             | ✅     | ✅         | ✅ (Owner deletes globally) |   
-| Link or Unlink Album        | ✅     | ❌         | ✅                          |   
-| Edit Tag or Person Metadata | ✅     | ✅         | ✅ (Owner overwrites)       |  
+| Link or Unlink Album        | ✅     | ❌      | ✅                          |   
+| Edit Tag or Person Metadata | ✅     | ✅      | ✅ (Owner overwrites)       |  
 
 ---
 
@@ -189,5 +189,6 @@ The system operates on an **owner/non-owner** model. The owner is the user who u
 * Linking assets is not instant — expect ~1–2 seconds per asset on slower disks.
 * The Immich *Memories* feature currently does not work correctly with linked assets.
 * If you create a stack of assets, only **linked** assets will be cloned
+* Sometimes, when you add, remove tags, or edit metadata of an asset, **Immich** can refresh the sidecar too often, which causes the auto-recreation of the **linked** asset.
 
 ---
