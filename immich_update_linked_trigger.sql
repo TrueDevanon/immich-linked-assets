@@ -13,11 +13,11 @@ DECLARE
     a_cluster UUID;
 BEGIN
     IF EXISTS (SELECT 1 FROM linked.asset WHERE id = old.id and base_owner is true) THEN
-		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = old.id;
+		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id in (old.id,old."livePhotoVideoId");
 		delete from asset
 		where id in (select id from linked.asset where asset_cluster = a_cluster);
 	else
-		delete from asset where id = old.id;
+		delete from asset where id in (old.id,old."livePhotoVideoId");
 	END IF;
     RETURN NULL;
 END;
@@ -95,9 +95,9 @@ BEGIN
 		IF exists (select 1 from linked.album as a where a.tag_id = new.tag_id) THEN
 			IF new.base_owner is true THEN
 				delete from asset
-				where id in (select id from linked.asset where asset_cluster = new.asset_cluster and base_owner is false);
+				where id in (select id from linked.asset where asset_cluster in (new.asset_cluster,new.lp_asset_cluster) and base_owner is false);
 				delete from linked.asset
-				where id in (select id from linked.asset where asset_cluster = new.asset_cluster);
+				where id in (select id from linked.asset where asset_cluster in (new.asset_cluster,new.lp_asset_cluster));
 				delete from linked.tag_helper where asset_cluster = new.asset_cluster and tag_cluster = new.tag_cluster;
 			END IF;
 			RETURN NULL;
@@ -123,6 +123,7 @@ CREATE OR REPLACE FUNCTION linked.tag_helper_func()
 RETURNS TRIGGER AS $$
 DECLARE
 	a_asset_cluster UUID;
+	lp_asset_cluster UUID;
 	a_tag_cluster UUID;
 	a_base_owner bool;
 BEGIN
@@ -130,18 +131,19 @@ BEGIN
 		delete from linked.tag_helper where asset_cluster = (select asset_cluster from linked.asset where id = new."assetsId");
 		RETURN NULL;
 	END IF;
-	IF EXISTS (SELECT 1 FROM linked.tag WHERE id = new."tagsId" or id = old."tagsId") THEN
-		select base_owner into a_base_owner from linked.asset where id = new."assetsId" or id = old."assetsId";
+	IF EXISTS (SELECT 1 FROM linked.tag WHERE id = old."tagsId") THEN
+		select base_owner into a_base_owner from linked.asset where id = old."assetsId";
 		IF a_base_owner is not null THEN
-			select tag_cluster into a_tag_cluster from linked.tag where id = new."tagsId" or id = old."tagsId";
-			select asset_cluster into a_asset_cluster from linked.asset where id = new."assetsId" or id = old."assetsId";
+			select tag_cluster into a_tag_cluster from linked.tag where id = old."tagsId";
+			select asset_cluster into a_asset_cluster from linked.asset where id = old."assetsId";
+			select asset_cluster into lp_asset_cluster from linked.asset where id = (select "livePhotoVideoId" from asset where id = old."assetsId");
 			IF exists (select 1 from linked.tag_helper where asset_cluster = a_asset_cluster) THEN
 				update linked.tag_helper as th
 				set status = true
 				where th.status is false and th.asset_cluster = a_asset_cluster and th.tag_cluster = a_tag_cluster;
 			ELSE
-				insert into linked.tag_helper (asset_cluster, tag_cluster, base_owner, tag_id, status)
-				select a_asset_cluster, a_tag_cluster, a_base_owner, old."tagsId", false;
+				insert into linked.tag_helper (asset_cluster, lp_asset_cluster, tag_cluster, base_owner, tag_id, status)
+				select a_asset_cluster, lp_asset_cluster, a_tag_cluster, a_base_owner, old."tagsId", false;
 				update linked.tag_helper as th
 				set status = true
 				where th.status is false and th.asset_cluster = a_asset_cluster and th.tag_cluster = a_tag_cluster;
@@ -741,33 +743,38 @@ DECLARE
     a_asset_cluster uuid;
 	a_album_cluster uuid;
 	a_stack_cluster uuid;
+	a_livephoto_id uuid;
 BEGIN
     IF EXISTS (SELECT 1 FROM linked.album WHERE tag_id = new."tagsId") THEN
 		IF NOT EXISTS (SELECT 1 FROM linked.asset WHERE id = new."assetsId") THEN
 		--- if asset should be linked
-			SELECT uuid_generate_v4(), a.album_cluster
-	        INTO a_asset_cluster, a_album_cluster
+			SELECT a.album_cluster
+	        INTO a_album_cluster
 	        FROM linked.album a
 	        WHERE a.tag_id = new."tagsId";
 			select ls.stack_cluster into a_stack_cluster from asset as a
 			inner join linked.stack as ls on ls.id = a."stackId"
 			where a.id = new."assetsId";
+			select "livePhotoVideoId" into a_livephoto_id from asset as a where a.id = new."assetsId";
 			---
-			with asset_filter as (select a_album_cluster as album_cluster, a_asset_cluster as asset_cluster, a."ownerId" as owner_id, true as base_owner, "stackId", a.id from asset as a where a.id=NEW."assetsId"),
-			final_table as (select b.album_cluster,a.asset_cluster,b.owner_id,coalesce(aa.base_owner,false) as base_owner, (case when a."stackId" is null then null else coalesce(aa."stackId",ls.id,uuid_generate_v4()) end) as stack_id, coalesce(aa.id,uuid_generate_v4()) as id from asset_filter as a
+			with asset_filter as (select a_album_cluster as album_cluster, uuid_generate_v4() as asset_cluster, a."ownerId" as owner_id, true as base_owner, "stackId", a.id, (case when id = a_livephoto_id then true else false end) as livephoto from asset as a where a.id in (NEW."assetsId",a_livephoto_id)),
+			final_table as (select b.album_cluster,a.asset_cluster,b.owner_id,coalesce(aa.base_owner,false) as base_owner, (case when a."stackId" is null then null else coalesce(aa."stackId",ls.id,uuid_generate_v4()) end) as stack_id, coalesce(aa.id,uuid_generate_v4()) as id, a.livephoto from asset_filter as a
 				left join linked.album as b on b.album_cluster = a.album_cluster
 				left join linked.stack as ls on ls.stack_cluster = a_stack_cluster and ls.owner_id = b.owner_id
 				left join asset_filter as aa on b.owner_id = aa.owner_id and aa.asset_cluster = a.asset_cluster),
 			joined AS (SELECT 
 				n.id as new_id,
 				n.owner_id,
+				lp.id as livephoto_id,
 			    to_jsonb(t) AS data
 			    FROM final_table m
 			    left JOIN asset t ON t.id = m.id
 			    left JOIN final_table n ON m.asset_cluster = n.asset_cluster
+				left join final_table lp on lp.owner_id = n.owner_id and lp.livephoto is true and n.livephoto is false
 			    where m.base_owner is true and n.base_owner is false),
 			patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
 			  							'stackId', null,
+										'livePhotoVideoId', to_jsonb(livephoto_id),
 										'duplicateId', null,
 			  							'ownerId', to_jsonb(owner_id)) AS new_data FROM joined),
 			insert_asset as (INSERT INTO asset
