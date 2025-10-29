@@ -1,3 +1,21 @@
+---- asserts
+
+DO $$ DECLARE val bool; BEGIN select true into val from public.album where "albumName" = 'linked album'; ASSERT val is true, 'linked album do not exists'; END$$;
+DO $$ DECLARE val bool; BEGIN select true into val from public.album where "albumName" = 'linked album' and description is not null; ASSERT val is true, 'linked album has no description'; END$$;
+DO $$ DECLARE val bool; BEGIN select true into val from public.album inner join tag on album.description = tag.value where "albumName" = 'linked album'; ASSERT val is true, 'linked tag not match in linked album description or not exists'; END$$;
+DO $$ DECLARE val bool; BEGIN
+with base as (
+	select "ownerId" as owner_id,description,id from public.album
+	WHERE "albumName"::text ~~* '%%linked album%%'::text),
+final as (select owner_id,description from base
+	union
+	select b."usersId",a.description from base as a
+	LEFT JOIN public.album_user as b ON a.id = b."albumsId")
+select true into val from final as b
+left join public.tag as t on t.value ilike b.description::text || '%%' and t."userId"=b.owner_id
+where t.id is null;
+ASSERT val is null, 'you must create a linked tag for each participant with the name mentioned in the linked album description'; END$$;
+
 ---- create schema
 
 CREATE SCHEMA linked AUTHORIZATION postgres;
@@ -92,7 +110,7 @@ create table linked.tag_helper (
 
 insert into linked.album (album_cluster,owner_id,base_owner,description,id)
 with base as (
-	select uuid_generate_v4() as album_cluster,"ownerId" as owner_id,true as base_owner,description,id from album
+	select uuid_generate_v4() as album_cluster,"ownerId" as owner_id,true as base_owner,description,id from public.album
 	WHERE album."albumName"::text ~~* '%%linked album%%'::text)
 select album_cluster,owner_id,base_owner,description,id from base
 union
@@ -105,7 +123,7 @@ on conflict (id) do nothing;
 update linked.album as a
 set tag_id = t.id
 from (select  t.id, b.album_cluster, b.owner_id from linked.album as b
-	left join tag as t on t.value ilike b.description::text || '%%' and t."userId"=b.owner_id) as t
+	left join public.tag as t on t.value ilike b.description::text || '%%' and t."userId"=b.owner_id) as t
 where a.album_cluster = t.album_cluster and a.owner_id = t.owner_id;
 
 ---- create linked.asset
@@ -457,7 +475,6 @@ on conflict ("assetsId","tagsId") do nothing;
 ---------------------------------------------------------------------------------------------------------
 
 
-ALTER TABLE linked.asset ADD CONSTRAINT asset_asset_fk FOREIGN KEY (id) REFERENCES public.asset(id) ON DELETE CASCADE;
 ALTER TABLE linked.asset_file ADD CONSTRAINT asset_file_asset_fk FOREIGN KEY (asset_id) REFERENCES linked.asset(id) ON DELETE CASCADE;
 ALTER TABLE linked.asset_face ADD CONSTRAINT asset_face_asset_fk FOREIGN KEY (asset_id) REFERENCES linked.asset(id) ON DELETE CASCADE;
 ALTER TABLE linked.shared_album ADD CONSTRAINT album_shared_album_fk FOREIGN KEY (id) REFERENCES public.album(id) ON DELETE CASCADE;
@@ -505,14 +522,13 @@ CREATE INDEX tag_helper_asset_cluster_idx ON linked.tag_helper (asset_cluster,ta
 CREATE OR REPLACE FUNCTION linked.delete_linked_asset()
 RETURNS TRIGGER AS $$
 DECLARE
-    a_cluster UUID;
+    a_cluster UUID[];
 BEGIN
     IF EXISTS (SELECT 1 FROM linked.asset WHERE id = old.id and base_owner is true) THEN
-		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id in (old.id,old."livePhotoVideoId");
+		SELECT array_agg(asset_cluster) INTO a_cluster FROM linked.asset WHERE id in (old.id,old."livePhotoVideoId");
 		delete from asset
-		where id in (select id from linked.asset where asset_cluster = a_cluster);
-	else
-		delete from asset where id in (old.id,old."livePhotoVideoId");
+		where id in (select id from linked.asset where asset_cluster = ANY(a_cluster));
+		delete from linked.asset where asset_cluster = ANY(a_cluster);
 	END IF;
     RETURN NULL;
 END;
@@ -520,7 +536,7 @@ $$ LANGUAGE plpgsql;
 
 ---- trigger for delete_asset_recursive
 
-create OR REPLACE trigger trigger_delete_linked_asset before delete
+create OR REPLACE trigger trigger_delete_linked_asset after delete
 on asset for each row
 WHEN (pg_trigger_depth() = 0)
 execute function linked.delete_linked_asset();
@@ -883,21 +899,22 @@ BEGIN
 				SELECT stack_cluster INTO s_cluster FROM linked.stack WHERE id = new."stackId";
 			END IF;
 			IF old."stackId" is null and new."stackId" is not null and s_cluster is null THEN
-				with base as (select a.asset_cluster as stack_cluster, aa.id as asset_id, aa.owner_id, aa.base_owner, coalesce(lss.id,s.id,uuid_generate_v4()) as id from linked.album as la
+				with base as (select coalesce(a.asset_cluster,b.asset_cluster) as asset_cluster from stack as s
+					left join linked.asset as a on a.id = s."primaryAssetId"
+					left join linked.asset as b on b.id = new.id
+					where s.id = new."stackId"),
+				final_table as (select a.asset_cluster as stack_cluster, a.id as asset_id, a.owner_id, a.base_owner, coalesce(s.id,uuid_generate_v4()) as id from linked.album as la
 					left join stack as s on la.owner_id = s."ownerId" and s.id = new."stackId"
-					left join linked.stack as ls on ls.id = new."stackId"
-					left join linked.stack as lss on ls.stack_cluster = lss.stack_cluster and lss.owner_id = la.owner_id
-					left join linked.asset as a on a.id = new.id
-					left join linked.asset as aa on a.asset_cluster = aa.asset_cluster and aa.owner_id = la.owner_id),
+					left join linked.asset as a on a.asset_cluster = (select asset_cluster from base) and a.owner_id = la.owner_id),
 				insert_stack as (INSERT INTO stack (id, "primaryAssetId", "ownerId")
-					select id,asset_id,owner_id from base where base_owner is false
+					select id,asset_id,owner_id from final_table where base_owner is false
 					ON CONFLICT (id) DO NOTHING
 					RETURNING 1)
 				insert into linked.stack (stack_cluster,owner_id,base_owner,id)
-				select stack_cluster,owner_id,base_owner,id from base
+				select stack_cluster,owner_id,base_owner,id from final_table
 				ON CONFLICT (id) DO NOTHING;
+				SELECT stack_cluster INTO s_cluster FROM linked.stack WHERE id = new."stackId";
 			END IF;
-			SELECT stack_cluster INTO s_cluster FROM linked.stack WHERE id = new."stackId";
 			update asset as a
 			set "fileModifiedAt" = NEW."fileModifiedAt",
 			"createdAt" = NEW."createdAt",

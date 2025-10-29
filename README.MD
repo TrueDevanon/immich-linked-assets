@@ -191,5 +191,6 @@ The system operates on an **owner/non-owner** model. The owner is the user who u
 * If you create a stack of assets, only **linked** assets will be cloned
 * Sometimes, when you add, remove tags, or edit metadata of an asset, **Immich** can refresh the sidecar too often, which causes the auto-recreation of the **linked** asset.
 * Be careful with deduplication feature in Immich.
+* When you create a stack as an asset owner, the primary asset in the **linked** stack can differ (if the primary asset is not **linked**).
 
 ---
