@@ -4,7 +4,7 @@ A robust SQL-based automation tool for **synchronizing and sharing assets** acro
 
 ---
 
-### ✅ Tested Immich version: **v2.1.0**
+### ✅ Tested Immich version: **v2.2.0**
 
 ---
 

@@ -429,7 +429,7 @@ WITH joined AS (SELECT
     n.id as new_id,
     to_jsonb(t) AS data
   	FROM linked.asset m
-  	left JOIN public.asset_exif t ON t."assetId" = m.id
+  	inner JOIN public.asset_exif t ON t."assetId" = m.id
   	left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
   	where m.base_owner is true and n.base_owner is false),
 patched AS (SELECT data || jsonb_build_object('assetId', to_jsonb(new_id)) AS new_data FROM joined)
@@ -443,6 +443,31 @@ INSERT INTO public.smart_search
 SELECT n.id, t.embedding
 FROM linked.asset m
 inner JOIN public.smart_search t ON t."assetId" = m.id
+inner JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
+where m.base_owner is true and n.base_owner is false
+on CONFLICT ("assetId") do nothing;
+
+---- insert asset_ocr
+
+WITH joined AS (SELECT
+    n.id as new_id,
+	uuid_generate_v4() as generated_id,
+    to_jsonb(t) AS data
+  	FROM linked.asset m
+  	inner JOIN public.asset_ocr t ON t."assetId" = m.id
+  	inner JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
+  	where m.base_owner is true and n.base_owner is false),
+patched AS (SELECT data || jsonb_build_object('assetId', to_jsonb(new_id), 'id', to_jsonb(generated_id)) AS new_data FROM joined)
+INSERT INTO public.asset_ocr
+SELECT (jsonb_populate_record(NULL::public.asset_ocr, new_data)).* FROM patched
+on CONFLICT (id) do nothing;
+
+---- insert ocr_search
+
+INSERT INTO public.ocr_search
+SELECT n.id, t."text"
+FROM linked.asset m
+inner JOIN public.ocr_search t ON t."assetId" = m.id
 inner JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
 where m.base_owner is true and n.base_owner is false
 on CONFLICT ("assetId") do nothing;
@@ -1480,7 +1505,7 @@ BEGIN
 		  	left JOIN public.asset_exif t ON t."assetId" = m.id
 		  	left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
 		  	where m.base_owner is true and n.base_owner is false and m.id = new.id),
-		patched AS (SELECT data || jsonb_build_object('assetId', to_jsonb(new_id) ) AS new_data FROM joined)
+		patched AS (SELECT data || jsonb_build_object('assetId', to_jsonb(new_id)) AS new_data FROM joined)
 		INSERT INTO public.asset_exif
 		SELECT (jsonb_populate_record(NULL::public.asset_exif, new_data)).* FROM patched
 		ON CONFLICT ("assetId") DO NOTHING;
@@ -1520,3 +1545,58 @@ create OR REPLACE trigger trigger_link_new_smart_search after insert
 on linked.asset for each row
 WHEN (pg_trigger_depth() = 1)
 execute function linked.link_new_smart_search();
+
+---- create new asset ocr
+
+CREATE OR REPLACE FUNCTION linked.link_new_asset_ocr()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF new.base_owner is true THEN
+		WITH joined AS (SELECT
+		    n.id as new_id,
+			uuid_generate_v4() as generated_id,
+		    to_jsonb(t) AS data
+		  	FROM linked.asset m
+		  	inner JOIN public.asset_ocr t ON t."assetId" = m.id
+		  	inner JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
+		  	where m.base_owner is true and n.base_owner is false and m.id = new.id),
+		patched AS (SELECT data || jsonb_build_object('assetId', to_jsonb(new_id), 'id', to_jsonb(generated_id)) AS new_data FROM joined)
+		INSERT INTO public.asset_ocr
+		SELECT (jsonb_populate_record(NULL::public.asset_ocr, new_data)).* FROM patched
+		ON CONFLICT (id) DO NOTHING;
+	END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+---- create trigger_link_new_asset_ocr
+
+create OR REPLACE trigger trigger_link_new_asset_ocr after insert
+on linked.asset for each row
+WHEN (pg_trigger_depth() = 1)
+execute function linked.link_new_asset_ocr();
+
+---- create new ocr search
+
+CREATE OR REPLACE FUNCTION linked.link_new_ocr_search()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF new.base_owner is true THEN
+		INSERT INTO public.ocr_search ("assetId","text")
+		SELECT n.id, t."text"
+		FROM linked.asset m
+		inner JOIN public.ocr_search t ON t."assetId" = m.id
+		inner JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
+		where m.base_owner is true and n.base_owner is false and m.id = new.id
+		ON CONFLICT ("assetId") DO NOTHING;
+	END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+---- create trigger_link_new_ocr_search
+
+create OR REPLACE trigger trigger_link_new_ocr_search after insert
+on linked.asset for each row
+WHEN (pg_trigger_depth() = 1)
+execute function linked.link_new_ocr_search();
