@@ -4,6 +4,7 @@ drop trigger if exists trigger_delete_linked_asset on asset;
 drop trigger if exists trigger_delete_linked_tag on tag;
 drop trigger if exists trigger_delete_shared_album on album;
 drop trigger if exists trigger_delete_from_album on album_asset;
+drop trigger if exists trigger_delete_linked_stack on stack;
 
 ---- drop triggers on linked base
 
@@ -11,6 +12,8 @@ drop trigger if exists trigger_link_new_asset_file on linked.asset;
 drop trigger if exists trigger_insert_linked_asset_face on linked.asset;
 drop trigger if exists trigger_link_new_asset_exif on linked.asset;
 drop trigger if exists trigger_link_new_smart_search on linked.asset;
+drop trigger if exists trigger_link_new_asset_ocr on linked.asset;
+drop trigger if exists trigger_link_new_ocr_search on linked.asset;
 drop trigger if exists trigger_insert_linked_person on linked.asset_face;
 drop trigger if exists trigger_delete_asset_tag on linked.tag_helper;
 
@@ -26,7 +29,6 @@ drop trigger if exists trigger_update_linked_album on album;
 drop trigger if exists trigger_link_new_album on album_asset;
 drop trigger if exists trigger_update_linked_tag on tag;
 drop trigger if exists trigger_update_linked_person on person;
-drop trigger if exists trigger_delete_linked_stack on stack;
 drop trigger if exists trigger_update_stack_primary_asset on stack;
 
 ---- delete cloned asset 
