@@ -827,7 +827,7 @@ BEGIN
 	IF NOT EXISTS (SELECT 1 FROM linked.shared_album WHERE id = new.id) THEN
 		IF new.description = 'create linked album' THEN
 			--- new linked album
-			with base as (select a."albumName" as album_name, uuid_generate_v4() as shared_album_cluster, la.album_cluster, la.owner_id, true as base_owner, a.id from public.album as a
+			with base as (select a."albumName" as album_name, uuid_generate_v4() as shared_album_cluster, la.album_cluster, a."ownerId" as owner_id, true as base_owner, a.id from public.album as a
 				left join linked.album as la on a."ownerId" = la.owner_id
 				where a.id = new.id),
 			final_album as (
