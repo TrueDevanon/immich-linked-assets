@@ -1,5 +1,6 @@
 ---- asserts
 
+DO $$ DECLARE val bool; BEGIN select (value -> 'storageTemplate' -> 'enabled')::bool into val from public.system_metadata where key = 'system-config'; ASSERT val is false or val is null, 'Storage Template is not compatible'; END $$;
 DO $$ DECLARE val bool; BEGIN select true into val from public.album where "albumName" = 'linked album'; ASSERT val is true, 'linked album do not exists'; END $$;
 DO $$ DECLARE val bool; BEGIN select true into val from public.album where "albumName" = 'linked album' and description is not null; ASSERT val is true, 'linked album has no description'; END $$;
 DO $$ DECLARE val bool; BEGIN select true into val from public.album inner join tag on album.description = tag.value where "albumName" = 'linked album'; ASSERT val is true, 'linked tag not match in linked album description or not exists'; END $$;
