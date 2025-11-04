@@ -4,7 +4,7 @@ A robust SQL-based automation tool for **synchronizing and sharing assets** acro
 
 ---
 
-### ✅ Tested Immich version: **v2.2.0**
+### ✅ Tested Immich version: **v2.2.1**
 
 ---
 
@@ -43,6 +43,8 @@ The system operates in two main steps:
 ---
 
 ## ⚙️ Setup Guide
+
+### **The script is not compatible with "Storage Templates".**
 
 0. **Verify Immich version compatibility.**
 
