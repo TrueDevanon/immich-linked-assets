@@ -19,7 +19,7 @@ ASSERT val is null, 'you must create a linked tag for each participant with the 
 
 ---- create schema
 
-CREATE SCHEMA linked AUTHORIZATION postgres;
+CREATE SCHEMA linked;
 
 ----- create tables
 
