@@ -226,7 +226,7 @@ on CONFLICT (id) do nothing;
 
 with base as (select uuid_generate_v4() as tag_cluster, la.album_cluster, la.owner_id, true as base_owner, true as parent_updated, t.value, t.id from public.tag as t
 	left join public.user as u on u.id = t."userId"
-	left join linked.album as la on u.id = la.owner_id
+	inner join linked.album as la on u.id = la.owner_id
 	where u.name = t.value and not exists (select 1 from linked.tag where id = t.id))
 insert into linked.tag (tag_cluster,owner_id,base_owner,parent_updated,value,id)
 select tag_cluster, owner_id, base_owner, parent_updated, value, id from base
