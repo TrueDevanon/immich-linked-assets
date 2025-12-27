@@ -174,7 +174,7 @@ The system operates on an **owner/non-owner** model. The owner is the user who u
 | ------------------------ | ----- | --------- | --------------------------   | 
 | Edit Asset Metadata      | ✅     | ✅         | ✅                          |   
 | Add or Remove Tags       | ✅     | ✅         | ✅                          |   
-| Modify People            | ✅     | ✅         | ❌ (Requires re-link)       |   
+| Modify Person on Asset   | ✅     | ✅         | ❌ (Requires re-link)       |   
 | Delete Asset             | ✅     | ✅         | ✅ (Owner deletes globally) |   
 | Remove linked Tag        | ✅     | ✅         | ✅ (Owner unlink globally)  |   
 | Edit Album Metadata      | ✅     | ❌         | ✅ (Owner overwrites)       |   
