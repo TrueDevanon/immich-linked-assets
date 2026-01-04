@@ -34,6 +34,8 @@ The system operates in two main steps:
 
 ### After Initial Setup
 
+#### ⚠️ **Important Note:** Due to the script’s design, you can add the `linked` tag only to an existing asset in Immich. Do not add the `linked` tag to your photos before you upload it.
+
 * **Tag Trigger** — When an asset receives the `linked` tag, it triggers a clone for all linked users.
 * **Cloning Logic** — Each user gets a full, copy of the asset, including metadata, tags, and facial recognition data.
 * **Real-Time Sync** — Any changes (metadata, tags) are instantly propagated to all linked copies.
