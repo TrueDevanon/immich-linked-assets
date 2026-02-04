@@ -4,7 +4,7 @@ A robust SQL-based automation tool for **synchronizing and sharing assets** acro
 
 ---
 
-### ✅ Tested Immich version: **v2.4.1**
+### ✅ Tested Immich version: **v2.5.3**
 
 ---
 
@@ -184,6 +184,7 @@ The system operates on an **owner/non-owner** model. The owner is the user who u
 | Delete Album             | ✅     | ✅         | ✅ (Owner deletes globally) |   
 | Link or Unlink Album        | ✅     | ❌      | ✅                          |   
 | Edit Tag or Person Metadata | ✅     | ✅      | ✅ (Owner overwrites)       |  
+| Edit asset (crop/rotate/etc) | ✅     | ✅       | ❌ (Requires re-link)        |  
 
 ---
 
@@ -191,7 +192,7 @@ The system operates on an **owner/non-owner** model. The owner is the user who u
 
 * To avoid duplicate people entries, merge your **base** to **linked** people across accounts. This ensures new linked assets reuse existing entities. (Note: owner metadata updates will propagate to everyone.)
 * Linking assets is not instant — expect ~1–2 seconds per asset on slower disks.
-* The Immich *Memories* feature currently does not work correctly with linked assets.
+* ~~The Immich *Memories* feature currently does not work correctly with linked assets.~~
 * If you create a stack of assets, only **linked** assets will be cloned
 * Sometimes, when you add, remove tags, or edit metadata of an asset, **Immich** can refresh the sidecar too often, which causes the auto-recreation of the **linked** asset.
 * Be careful with deduplication feature in Immich.

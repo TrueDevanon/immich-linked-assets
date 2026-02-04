@@ -753,6 +753,29 @@ on public.stack for each row
 WHEN (pg_trigger_depth() = 0)
 execute function linked.delete_linked_stack();
 
+-- ---- delete asset edit
+
+-- CREATE OR REPLACE FUNCTION linked.delete_asset_edit()
+-- RETURNS TRIGGER AS $$
+-- DECLARE
+--     a_cluster UUID;
+-- BEGIN
+--     IF EXISTS (SELECT 1 FROM linked.asset WHERE id in (select "assetId" from deleted_edit) and base_owner is true) THEN
+-- 		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id in (select "assetId" from deleted_edit);
+-- 		delete from public.asset_edit
+-- 		where "assetId" in (select id from linked.asset where asset_cluster = a_cluster);
+-- 	END IF;
+--     RETURN NULL;
+-- END;
+-- $$ LANGUAGE plpgsql;
+
+-- ---- trigger for delete asset edit
+
+-- create OR REPLACE trigger trigger_delete_asset_edit after delete 
+-- on public.asset_edit referencing old table as deleted_edit for each statement 
+-- WHEN ((pg_trigger_depth() = 0))
+-- execute function linked.delete_asset_edit();
+
 
 ---------------------------------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------------------------------
@@ -1183,6 +1206,38 @@ on public.album_asset for each row
 WHEN (pg_trigger_depth() = 0)
 execute function linked.link_new_album();
 
+-- ---- create upsert asset edit
+
+-- CREATE OR REPLACE FUNCTION linked.upsert_asset_edit()
+-- RETURNS trigger
+-- AS $$
+-- DECLARE
+--     a_cluster UUID;
+-- BEGIN
+--     IF EXISTS (SELECT 1 FROM linked.asset WHERE id in (select "assetId" from upserted_edit) and base_owner is true) THEN
+-- 		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id in (select "assetId" from upserted_edit);
+-- 		with joined as (select coalesce(pae.id,uuid_generate_v4()) as id, la.id as "assetId", 
+-- 				la.base_owner, to_jsonb(ae) as data from upserted_edit as ae
+-- 			left join linked.asset as la on a_cluster = la.asset_cluster
+-- 			left join public.asset_edit as pae on ae."sequence" = pae."sequence" and la.id = pae."assetId"
+-- 			where la.base_owner is false),
+-- 		patched AS (SELECT data || jsonb_build_object('id', to_jsonb("id"),
+-- 										'assetId', to_jsonb("assetId")) AS new_data FROM joined)
+-- 			INSERT INTO public.asset_edit
+-- 			SELECT (jsonb_populate_record(NULL::public.asset_edit, new_data)).* FROM patched
+-- 			ON CONFLICT ("assetId","sequence") DO NOTHING; 
+-- 	END IF;
+-- 	RETURN NULL;
+-- END;
+-- $$ LANGUAGE plpgsql;
+
+-- ---- trigger for upsert asset edit
+
+-- create OR REPLACE trigger trigger_upsert_asset_edit after insert 
+-- on public.asset_edit referencing new table as upserted_edit for each statement 
+-- WHEN ((pg_trigger_depth() = 0))
+-- execute function linked.upsert_asset_edit();
+
 ---- create new tag
 
 CREATE OR REPLACE FUNCTION linked.link_new_tag()
@@ -1283,7 +1338,6 @@ execute function linked.link_new_tag();
 CREATE OR REPLACE FUNCTION linked.link_new_asset()
 RETURNS TRIGGER AS $$
 DECLARE
-    a_asset_cluster uuid;
 	a_album_cluster uuid;
 	a_stack_cluster uuid;
 	a_livephoto_id uuid;
@@ -1300,8 +1354,14 @@ BEGIN
 			where a.id = new."assetId";
 			select "livePhotoVideoId" into a_livephoto_id from public.asset as a where a.id = new."assetId";
 			---
-			with asset_filter as (select a_album_cluster as album_cluster, uuid_generate_v4() as asset_cluster, a."ownerId" as owner_id, true as base_owner, "stackId", a.id, (case when id = a_livephoto_id then true else false end) as livephoto from public.asset as a where a.id in (NEW."assetId", a_livephoto_id)),
-			final_table as (select b.album_cluster, a.asset_cluster, b.owner_id, coalesce(aa.base_owner,false) as base_owner, (case when a."stackId" is null then null else coalesce(aa."stackId",ls.id,uuid_generate_v4()) end) as stack_id, coalesce(aa.id,uuid_generate_v4()) as id, a.livephoto from asset_filter as a
+			with asset_filter as (select a_album_cluster as album_cluster, uuid_generate_v4() as asset_cluster, 
+				a."ownerId" as owner_id, true as base_owner, "stackId", a.id, 
+				(case when id = a_livephoto_id then true else false end) as livephoto 
+					from public.asset as a where a.id in (NEW."assetId", a_livephoto_id)),
+			final_table as (select b.album_cluster, a.asset_cluster, b.owner_id, 
+				coalesce(aa.base_owner,false) as base_owner, 
+				(case when a."stackId" is null then null else coalesce(aa."stackId",ls.id,uuid_generate_v4()) end) as stack_id, 
+				coalesce(aa.id,uuid_generate_v4()) as id, a.livephoto from asset_filter as a
 				left join linked.album as b on b.album_cluster = a.album_cluster
 				left join linked.stack as ls on ls.stack_cluster = a_stack_cluster and ls.owner_id = b.owner_id
 				left join asset_filter as aa on b.owner_id = aa.owner_id and aa.asset_cluster = a.asset_cluster),
@@ -1348,6 +1408,21 @@ BEGIN
 				set "stackId" = ft.stack_id
 				from final_table as ft
 				where a.id = ft.id and ft.base_owner is false
+				RETURNING 1),
+			joined_asset_edit as (SELECT 
+				uuid_generate_v4() as new_id,
+				n.id as asset_id,
+			    to_jsonb(t) AS data
+			    FROM final_table m
+			    left JOIN public.asset_edit t ON t."assetId" = m.id
+			    left JOIN final_table n ON m.asset_cluster = n.asset_cluster
+				left join final_table lp on lp.owner_id = n.owner_id
+			    where m.base_owner is true and n.base_owner is false and t.id is not null),
+			patched_asset_edit AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
+										'assetId', to_jsonb(asset_id)) AS new_data FROM joined_asset_edit),
+			insert_asset_edit as (INSERT INTO public.asset_edit
+				SELECT (jsonb_populate_record(NULL::public.asset_edit, new_data)).* FROM patched_asset_edit
+				ON CONFLICT ("assetId","sequence") do nothing
 				RETURNING 1)
 			--- insert new tag_asset
 			INSERT INTO public.tag_asset ("assetId","tagId")
