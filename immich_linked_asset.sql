@@ -753,29 +753,6 @@ on public.stack for each row
 WHEN (pg_trigger_depth() = 0)
 execute function linked.delete_linked_stack();
 
--- ---- delete asset edit
-
--- CREATE OR REPLACE FUNCTION linked.delete_asset_edit()
--- RETURNS TRIGGER AS $$
--- DECLARE
---     a_cluster UUID;
--- BEGIN
---     IF EXISTS (SELECT 1 FROM linked.asset WHERE id in (select "assetId" from deleted_edit) and base_owner is true) THEN
--- 		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id in (select "assetId" from deleted_edit);
--- 		delete from public.asset_edit
--- 		where "assetId" in (select id from linked.asset where asset_cluster = a_cluster);
--- 	END IF;
---     RETURN NULL;
--- END;
--- $$ LANGUAGE plpgsql;
-
--- ---- trigger for delete asset edit
-
--- create OR REPLACE trigger trigger_delete_asset_edit after delete 
--- on public.asset_edit referencing old table as deleted_edit for each statement 
--- WHEN ((pg_trigger_depth() = 0))
--- execute function linked.delete_asset_edit();
-
 
 ---------------------------------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------------------------------
@@ -1206,38 +1183,6 @@ on public.album_asset for each row
 WHEN (pg_trigger_depth() = 0)
 execute function linked.link_new_album();
 
--- ---- create upsert asset edit
-
--- CREATE OR REPLACE FUNCTION linked.upsert_asset_edit()
--- RETURNS trigger
--- AS $$
--- DECLARE
---     a_cluster UUID;
--- BEGIN
---     IF EXISTS (SELECT 1 FROM linked.asset WHERE id in (select "assetId" from upserted_edit) and base_owner is true) THEN
--- 		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id in (select "assetId" from upserted_edit);
--- 		with joined as (select coalesce(pae.id,uuid_generate_v4()) as id, la.id as "assetId", 
--- 				la.base_owner, to_jsonb(ae) as data from upserted_edit as ae
--- 			left join linked.asset as la on a_cluster = la.asset_cluster
--- 			left join public.asset_edit as pae on ae."sequence" = pae."sequence" and la.id = pae."assetId"
--- 			where la.base_owner is false),
--- 		patched AS (SELECT data || jsonb_build_object('id', to_jsonb("id"),
--- 										'assetId', to_jsonb("assetId")) AS new_data FROM joined)
--- 			INSERT INTO public.asset_edit
--- 			SELECT (jsonb_populate_record(NULL::public.asset_edit, new_data)).* FROM patched
--- 			ON CONFLICT ("assetId","sequence") DO NOTHING; 
--- 	END IF;
--- 	RETURN NULL;
--- END;
--- $$ LANGUAGE plpgsql;
-
--- ---- trigger for upsert asset edit
-
--- create OR REPLACE trigger trigger_upsert_asset_edit after insert 
--- on public.asset_edit referencing new table as upserted_edit for each statement 
--- WHEN ((pg_trigger_depth() = 0))
--- execute function linked.upsert_asset_edit();
-
 ---- create new tag
 
 CREATE OR REPLACE FUNCTION linked.link_new_tag()
@@ -1501,7 +1446,6 @@ WHEN (pg_trigger_depth() = 1)
 execute function linked.link_new_asset_file();
 
 ---- create new face to asset
-
 
 CREATE OR REPLACE FUNCTION linked.insert_linked_asset_face()
 RETURNS trigger
