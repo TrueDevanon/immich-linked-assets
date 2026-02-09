@@ -380,6 +380,10 @@ BEGIN
 			update public.asset as a
 			set visibility = 'timeline', status = 'active', "deletedAt" = null
 			where id in (select id from linked.asset where asset_cluster = a_cluster and id != new.id);
+		ELSIF new.visibility = 'archive' THEN
+			SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
+			update public.asset as a
+			set visibility = 'archive', "deletedAt" = null
 		ELSE
 			SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new.id;
 			IF new."stackId" is not null THEN
