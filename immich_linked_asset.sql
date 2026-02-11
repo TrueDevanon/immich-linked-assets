@@ -1156,6 +1156,29 @@ execute function linked.insert_linked_person();
 ---------------------------------------------------------------------------------------------------------
 
 
+---- check storage template
+
+CREATE OR REPLACE FUNCTION linked.check_storage_template()
+RETURNS TRIGGER AS $$
+BEGIN
+	IF (new.value -> 'storageTemplate' -> 'enabled')::bool THEN
+		raise 'The linked asset doesn`t support the storage template';
+	else
+		insert into public.system_metadata (key,value)
+		select new.key, new.value
+		on conflict (key) do update set value = new.value;
+	END IF;
+	RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+---- create trigger_check_storage_template
+
+create OR REPLACE trigger trigger_check_storage_template before insert 
+on public.system_metadata for each row
+WHEN (pg_trigger_depth() = 0)
+execute function linked.check_storage_template();
+
 ---- create new albums
 
 CREATE OR REPLACE FUNCTION linked.link_new_album()
@@ -1290,6 +1313,7 @@ DECLARE
 	a_album_cluster uuid;
 	a_stack_cluster uuid;
 	a_livephoto_id uuid;
+	a_shared_album_cluster uuid;
 BEGIN
     IF EXISTS (SELECT 1 FROM linked.album WHERE tag_id = new."tagId") THEN
 		IF NOT EXISTS (SELECT 1 FROM linked.asset WHERE id = new."assetId") THEN
@@ -1298,10 +1322,16 @@ BEGIN
 	        INTO a_album_cluster
 	        FROM linked.album a
 	        WHERE a.tag_id = new."tagId";
+			--
 			select ls.stack_cluster into a_stack_cluster from public.asset as a
 			inner join linked.stack as ls on ls.id = a."stackId"
 			where a.id = new."assetId";
+			--
 			select "livePhotoVideoId" into a_livephoto_id from public.asset as a where a.id = new."assetId";
+			--
+			select shared_album_cluster into a_shared_album_cluster from public.album_asset as aa
+			inner join linked.shared_album as a on aa."albumId" = a.id
+			where aa."assetId" = new."assetId";
 			---
 			with asset_filter as (select a_album_cluster as album_cluster, uuid_generate_v4() as asset_cluster, 
 				a."ownerId" as owner_id, true as base_owner, "stackId", a.id, 
@@ -1358,6 +1388,12 @@ BEGIN
 				from final_table as ft
 				where a.id = ft.id and ft.base_owner is false
 				RETURNING 1),
+			insert_album_asset as (INSERT INTO public.album_asset ("albumId","assetId")
+				select sa.id, ft.id from linked.shared_album as sa
+				inner join final_table as ft using(owner_id)
+				where ft.base_owner is false and sa.shared_album_cluster = a_shared_album_cluster and sa.id is not null
+				on conflict ("albumId","assetId") do nothing
+				RETURNING 1),
 			joined_asset_edit as (SELECT 
 				uuid_generate_v4() as new_id,
 				n.id as asset_id,
@@ -1371,7 +1407,7 @@ BEGIN
 										'assetId', to_jsonb(asset_id)) AS new_data FROM joined_asset_edit),
 			insert_asset_edit as (INSERT INTO public.asset_edit
 				SELECT (jsonb_populate_record(NULL::public.asset_edit, new_data)).* FROM patched_asset_edit
-				ON CONFLICT ("assetId","sequence") do nothing
+				ON conflict ("assetId","sequence") do nothing
 				RETURNING 1)
 			--- insert new tag_asset
 			INSERT INTO public.tag_asset ("assetId","tagId")
