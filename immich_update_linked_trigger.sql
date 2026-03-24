@@ -449,7 +449,7 @@ BEGIN
 			END IF;
 			update public.asset as a
 			set "fileModifiedAt" = NEW."fileModifiedAt",
-			"createdAt" = NEW."createdAt",
+			"fileCreatedAt" = NEW."fileCreatedAt",
 			"isOffline" = NEW."isOffline",
 			"localDateTime" = NEW."localDateTime",
 			"stackId" = (CASE WHEN s_cluster IS NULL THEN NULL ELSE ls.id end)
@@ -546,6 +546,10 @@ BEGIN
 		"timeZone" = NEW."timeZone",
 		rating = NEW.rating
 		where "assetId" in (select id from linked.asset WHERE asset_cluster = a_cluster and id != new."assetId");
+		--
+		update public.asset 
+		set "fileCreatedAt" = new."dateTimeOriginal"
+		where id in (select id from linked.asset WHERE asset_cluster = a_cluster and id != new."assetId");
 	END IF;
 	RETURN NULL;
 END;

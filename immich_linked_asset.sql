@@ -232,7 +232,7 @@ with base as (select distinct on (ta."tagId") (first_value(tag_cluster) OVER (PA
 insert into linked.tag (tag_cluster,owner_id,base_owner,parent_updated,value,id)
 select tag_cluster, owner_id, base_owner, parent_updated, value, id from base
 union
-select b.tag_cluster, ls.owner_id, false, false, b.value, coalesce(t.id,uuid_generate_v4()) from base as b
+select distinct on (ls.owner_id,b.value) b.tag_cluster, ls.owner_id, false, false, b.value, coalesce(t.id,uuid_generate_v4()) from base as b
 left join linked.asset as ls using (asset_cluster)
 left join public.tag as t on ls.owner_id = t."userId" and t.value = b.value
 where ls.base_owner is false and not exists (select 1 from base where id = t.id)
@@ -1006,7 +1006,7 @@ BEGIN
 			END IF;
 			update public.asset as a
 			set "fileModifiedAt" = NEW."fileModifiedAt",
-			"createdAt" = NEW."createdAt",
+			"fileCreatedAt" = NEW."fileCreatedAt",
 			"isOffline" = NEW."isOffline",
 			"localDateTime" = NEW."localDateTime",
 			"stackId" = (CASE WHEN s_cluster IS NULL THEN NULL ELSE ls.id end)
@@ -1103,6 +1103,10 @@ BEGIN
 		"timeZone" = NEW."timeZone",
 		rating = NEW.rating
 		where "assetId" in (select id from linked.asset WHERE asset_cluster = a_cluster and id != new."assetId");
+		--
+		update public.asset 
+		set "fileCreatedAt" = new."dateTimeOriginal"
+		where id in (select id from linked.asset WHERE asset_cluster = a_cluster and id != new."assetId");
 	END IF;
 	RETURN NULL;
 END;
