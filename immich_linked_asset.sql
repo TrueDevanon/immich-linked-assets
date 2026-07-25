@@ -878,37 +878,39 @@ BEGIN
 	IF NOT EXISTS (SELECT 1 FROM linked.shared_album WHERE id = new.id) THEN
 		IF new.description = 'create linked album' THEN
 			--- new linked album
-			with base as (select a."albumName" as album_name, uuid_generate_v4() as shared_album_cluster, 
-					la.album_cluster, a."ownerId" as owner_id, true as base_owner, a.id from public.album as a
-				left join linked.album as la on a."ownerId" = la.owner_id
-				where a.id = new.id),
-			final_album as (
-				select album_name, shared_album_cluster, owner_id, base_owner, id from base
-				union all
-				select b.album_name, b.shared_album_cluster, ls.owner_id, false, uuid_generate_v4() from base as b
-				left join linked.album as ls using (album_cluster)
-				where ls.owner_id != b.owner_id),
+			-- Immich v3.0+ removed album.ownerId; ownership now lives in album_user (role='owner')
+			CREATE TEMP TABLE tmp_final_album ON COMMIT DROP AS
+			with base as (select a."albumName" as album_name, uuid_generate_v4() as shared_album_cluster,
+					la.album_cluster, au."userId" as owner_id, true as base_owner, a.id from public.album as a
+				join public.album_user as au on au."albumId" = a.id and au.role = 'owner'
+				left join linked.album as la on au."userId" = la.owner_id
+				where a.id = new.id)
+			select album_name, shared_album_cluster, owner_id, base_owner, id from base
+			union all
+			select b.album_name, b.shared_album_cluster, ls.owner_id, false, uuid_generate_v4() from base as b
+			left join linked.album as ls using (album_cluster)
+			where ls.owner_id != b.owner_id;
+
 			--- into album
-			joined AS (SELECT 
-				n.id as new_id,
-				n.owner_id,
-				to_jsonb(t) AS data
-				FROM final_album as m
-				left JOIN public.album as t ON t.id = m.id
-				inner JOIN final_album as n ON m.shared_album_cluster = n.shared_album_cluster
-				where m.id = new.id and n.id != new.id),
-			patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
-										'description', to_jsonb(''::text),
-										'ownerId', to_jsonb(owner_id)) AS new_data FROM joined),
-			insert_album as (
-				INSERT INTO public.album
-				SELECT (jsonb_populate_record(NULL::public.album, new_data)).*
-				FROM patched
-				ON CONFLICT (id) DO NOTHING
-				RETURNING 1)
+			INSERT INTO public.album
+			SELECT (jsonb_populate_record(NULL::public.album, to_jsonb(t) || jsonb_build_object(
+						'id', to_jsonb(f.id),
+						'description', to_jsonb(''::text)))).*
+			FROM tmp_final_album AS f
+			JOIN public.album AS t ON t.id = new.id
+			WHERE f.id != new.id
+			ON CONFLICT (id) DO NOTHING;
+
+			--- assign ownership on each cloned album
+			INSERT INTO public.album_user ("albumId", "userId", role)
+			SELECT id, owner_id, 'owner'::album_user_role_enum
+			FROM tmp_final_album
+			WHERE id != new.id
+			ON CONFLICT ("albumId") WHERE role = 'owner'::album_user_role_enum DO NOTHING;
+
 			--- into linked.shared_album
 			insert into linked.shared_album (album_name,shared_album_cluster,owner_id,base_owner,id)
-			select album_name, shared_album_cluster, owner_id, base_owner, id from final_album
+			select album_name, shared_album_cluster, owner_id, base_owner, id from tmp_final_album
 			on conflict (id) do nothing;
 			INSERT INTO public.album_asset ("albumId","assetId")
 			with base as (select a.id, a.asset_cluster, sa.shared_album_cluster from public.album_asset as ta
@@ -918,7 +920,7 @@ BEGIN
 			select lt.id, a.id from base as b
 			inner join linked.asset as a using (asset_cluster)
 			inner join linked.shared_album as lt using (shared_album_cluster,owner_id)
-			where lt.id != new.id 
+			where lt.id != new.id
 			on conflict ("albumId","assetId") do nothing;
 			update public.album set description = '' where id = new.id;
 		END IF;

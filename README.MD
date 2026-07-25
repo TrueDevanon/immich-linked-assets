@@ -6,6 +6,10 @@ A robust SQL-based automation tool for **synchronizing and sharing assets** acro
 
 ### ✅ Tested Immich version: **v2.7.5**
 
+### 🩹 Immich v3.0.x note
+
+Immich v3.0 removed `album.ownerId` (owner is now a row in `album_user` with `role='owner'`), which broke `linked.update_linked_album()` with `column a.ownerId does not exist`. This has been patched and validated (create/delete linked album, ownership assignment) against **v3.0.3**. Only the album-linking trigger path was re-tested against v3 — if you hit issues elsewhere in the mod on v3.x, please open an issue.
+
 ---
 
 ## 🚀 Overview
