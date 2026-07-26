@@ -11,17 +11,15 @@ DO $$ DECLARE val bool; BEGIN select true into val from public.album inner join 
 	where "albumName" = 'linked album'; ASSERT val is true, 'linked tag not match in linked album description or not exists'; END $$;
 DO $$ DECLARE val bool; BEGIN
 with base as (
-	select "ownerId" as owner_id,description,id from public.album
-	WHERE "albumName"::text = 'linked album'::text),
-final as (select owner_id,description from base
-	union
-	select b."userId",a.description from base as a
-	LEFT JOIN public.album_user as b ON a.id = b."albumId")
-select true into val from final as b
+	select "userId" as owner_id,description,id from public.album
+	left join public.album_user on "albumId" = id
+	WHERE "albumName"::text = 'linked album'::text)
+select true into val from base as b
 left join public.tag as t on t.value = b.description::text and t."userId" = b.owner_id
 where t.id is null;
 ASSERT val is null, 'you must create a linked tag for each participant with the name mentioned in the linked album description'; END $$;
-
+DO $$ DECLARE val bool; BEGIN SELECT (substring(value->>'releaseVersion' FROM '^v?(\d)')::int >= 3) into val
+FROM system_metadata WHERE key = 'version-check-state'; ASSERT val is true, 'Immich version must be >3'; END $$;
 ---- create schema
 
 CREATE SCHEMA linked;
@@ -117,26 +115,27 @@ create table linked.tag_helper (
 
 insert into linked.album (album_cluster,owner_id,base_owner,description,id)
 with base as (
-	select uuid_generate_v4() as album_cluster, "ownerId" as owner_id, true as base_owner, description, id from public.album
-	WHERE "albumName"::text = 'linked album'::text)
+	select uuid_generate_v4() as album_cluster, "userId" as owner_id, true as base_owner, description, id from public.album
+	left join public.album_user on "albumId" = id
+	WHERE "albumName"::text = 'linked album'::text and role = 'owner')
 select album_cluster, owner_id, base_owner, description, id from base
 union
 select a.album_cluster, b."userId", false, a.description, uuid_generate_v4() from base as a
-LEFT JOIN public.album_user as b ON a.id = b."albumId"
+LEFT JOIN public.album_user as b ON a.id = b."albumId" and role != 'owner'
 on CONFLICT (id) do nothing;
 
 ---- update linked_tag_id
 
 update linked.album as a
 set tag_id = t.id
-from (select  t.id, b.album_cluster, b.owner_id from linked.album as b
+from (select t.id, b.album_cluster, b.owner_id from linked.album as b
 	left join public.tag as t on t.value = b.description::text and t."userId" = b.owner_id) as t
 where a.album_cluster = t.album_cluster and a.owner_id = t.owner_id;
 
 ---- create linked.asset
 
 with asset_filter as (select b.album_cluster, a.asset_cluster, a."ownerId" as owner_id, true as base_owner, 
-		a.id from (select *, uuid_generate_v4() as asset_cluster from public.asset) as a
+		a.id from (select id, "ownerId", uuid_generate_v4() as asset_cluster from public.asset) as a
 	left join linked.album as b on b.owner_id = a."ownerId"
 	where exists (select 1 from public.tag_asset where "assetId" = a.id and "tagId" = b.tag_id)),
 final_table as (select b.album_cluster, a.asset_cluster, b.owner_id, coalesce(aa.base_owner,false) as base_owner, 
@@ -264,76 +263,79 @@ on CONFLICT (id) do nothing;
 
 ---- insert asset
 
-WITH joined AS (SELECT
+WITH base_linked as (SELECT m.asset_cluster, t."livePhotoVideoId", to_jsonb(t) AS data FROM linked.asset m
+    inner join public.asset t ON t.id = m.id
+	where m.base_owner is true),
+joined AS (SELECT
 	n.id as new_id,
     n.owner_id,
     lpa.id as livephoto_id,
-    to_jsonb(t) AS data
-  	FROM linked.asset m
-  	left JOIN asset t ON t.id = m.id
-  	left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
-	left join linked.asset lp on lp.id = t."livePhotoVideoId"
-	left join linked.asset lpa on lp.asset_cluster = lpa.asset_cluster and lpa.owner_id = n.owner_id
-  	where m.base_owner is true and n.base_owner is false),
-patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
+    m.data
+  	FROM base_linked as m
+  	inner join linked.asset as n ON m.asset_cluster = n.asset_cluster
+	left join linked.asset as lp on lp.id = m."livePhotoVideoId"
+	left join linked.asset as lpa on lp.asset_cluster = lpa.asset_cluster and lpa.owner_id = n.owner_id
+  	where n.base_owner is false)
+INSERT INTO public.asset
+SELECT (jsonb_populate_record(NULL::public.asset, data || jsonb_build_object('id', to_jsonb(new_id),
 						'stackId', null, 'duplicateId', null, 'livePhotoVideoId', to_jsonb(livephoto_id),
-						'ownerId', to_jsonb(owner_id)) AS new_data FROM joined)
-INSERT INTO asset
-SELECT (jsonb_populate_record(NULL::asset, new_data)).* FROM patched
+						'ownerId', to_jsonb(owner_id)))).* FROM joined
 ON CONFLICT (id) DO NOTHING;
 
 ---- insert stack
 
-WITH joined AS (SELECT
+WITH base_linked as (SELECT m.stack_cluster, to_jsonb(t) AS data from linked.stack as m
+	inner join public.stack as t on t.id = m.id 
+	where m.base_owner is true),
+joined AS (SELECT
     n.id as new_id,
     n.owner_id,
 	la.id as primary_asset_id,
-    to_jsonb(t) AS data
-  	FROM linked.stack m
-  	left JOIN public.stack t ON t.id = m.id
-  	left JOIN linked.stack n ON m.stack_cluster = n.stack_cluster
-	left join linked.asset as la on la.asset_cluster = n.stack_cluster and n.owner_id = la.owner_id 
-  	where m.base_owner is true and n.base_owner is false),
-patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-							'primaryAssetId', to_jsonb(primary_asset_id),
-  							'ownerId', to_jsonb(owner_id)) AS new_data FROM joined)
+    m.data
+  	FROM base_linked as m
+  	inner join linked.stack n ON m.stack_cluster = n.stack_cluster
+	inner join linked.asset as la on la.asset_cluster = n.stack_cluster and n.owner_id = la.owner_id 
+  	where n.base_owner is false)
 INSERT INTO public.stack
-SELECT (jsonb_populate_record(NULL::public.stack, new_data)).* FROM patched
+SELECT (jsonb_populate_record(NULL::public.stack, data || jsonb_build_object('id', to_jsonb(new_id),
+							'primaryAssetId', to_jsonb(primary_asset_id),
+  							'ownerId', to_jsonb(owner_id)))).* FROM joined
 on CONFLICT (id) do nothing;
 
 ---- update stack in asset
 
-with base as (select la.asset_cluster, a."stackId" from public.asset as a 
+with base as (select la.asset_cluster, a."stackId" FROM public.asset as a 
 	inner join linked.asset as la using (id) 
 	where a."stackId" is not null)
 update public.asset as a
 set "stackId" = lss.id
-from base as b
-left join linked.asset as la using (asset_cluster)
+FROM base as b
+inner join linked.asset as la using (asset_cluster)
 inner join linked.stack as ls on b."stackId" = ls.id
 inner join linked.stack as lss on ls.stack_cluster = lss.stack_cluster and la.owner_id = lss.owner_id
 where la.base_owner is false and a.id = la.id;
 
 ---- insert shared_album
 
-WITH joined AS (SELECT
+WITH base_linked as (SELECT m.shared_album_cluster, to_jsonb(t) AS data from linked.shared_album as m
+	inner join public.album as t on t.id = m.id 
+	where m.base_owner is true),
+joined AS (SELECT
     n.id as new_id,
     n.owner_id,
-    to_jsonb(t) AS data
-  	FROM linked.shared_album m
-  	left JOIN public.album t ON t.id = m.id
-  	left JOIN linked.shared_album n ON m.shared_album_cluster = n.shared_album_cluster
-  	where m.base_owner is true and n.base_owner is false),
-patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-  							'ownerId', to_jsonb(owner_id)) AS new_data FROM joined)
+    m.data
+  	FROM base_linked as m
+  	inner JOIN linked.shared_album as n ON m.shared_album_cluster = n.shared_album_cluster
+  	where n.base_owner is false)
 INSERT INTO public.album
-SELECT (jsonb_populate_record(NULL::public.album, new_data)).* FROM patched
+SELECT (jsonb_populate_record(NULL::public.album, data || jsonb_build_object('id', to_jsonb(new_id),
+  							'ownerId', to_jsonb(owner_id)))).* FROM joined
 on CONFLICT (id) do nothing;
 
 ---- inset shared_album_asset
 
 INSERT INTO public.album_asset ("albumId","assetId")
-select al.id,a.id from (
+select al.id, a.id from (
 	select a.id as asset_id, a.asset_cluster, al.id as album_id, al.shared_album_cluster from public.album_asset as aaa
 	inner join linked.asset as a on a.id = aaa."assetId"
 	inner join linked.shared_album as al on aaa."albumId" = al.id) as b
@@ -343,30 +345,30 @@ where a.base_owner is false
 on CONFLICT ("albumId","assetId") do nothing;
 
 ---- insert tag
-
-with link as (select m.id as base_id, n.id, n.tag_cluster,n.owner_id from linked.tag as m 
+with base_linked as (SELECT m.id, m.tag_cluster, t."parentId", to_jsonb(t) AS data from linked.tag as m
+	inner join public.tag as t on t.id = m.id 
+	where m.base_owner is true),
+link as (select m.id as source_id, n.id, n.tag_cluster, n.owner_id, "parentId", m.data from base_linked as m 
 	left JOIN linked.tag as n ON m.tag_cluster = n.tag_cluster
-	where m.base_owner is true and n.base_owner is false),
+	where n.base_owner is false),
 joined AS (SELECT
     n.id as new_id,
     n.owner_id,
     l.id as parent_id,
-    to_jsonb(t) AS data
+    n.data
   	from link as n
-  	left JOIN public.tag as t ON t.id = n.base_id
-  	left JOIN (select base_id, id, owner_id from link) as l ON t."parentId" = l.base_id and n.owner_id = l.owner_id),
-patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-  							'parentId', to_jsonb(parent_id),
-  							'userId', to_jsonb(owner_id)) AS new_data FROM joined),
+  	left JOIN link as l ON n."parentId" = l.source_id and n.owner_id = l.owner_id),
 parent_updated as (update linked.tag set parent_updated = true where id in (select id from link) RETURNING 1)
 INSERT INTO public.tag
-SELECT (jsonb_populate_record(NULL::public.tag, new_data)).* FROM patched
+SELECT (jsonb_populate_record(NULL::public.tag, data || jsonb_build_object('id', to_jsonb(new_id),
+  							'parentId', to_jsonb(parent_id),
+  							'userId', to_jsonb(owner_id)))).* FROM joined
 on CONFLICT (id) do nothing;
 
 ---- inset into tag asset
 
 INSERT INTO public.tag_asset ("assetId","tagId")
-select a.id,lt.id  from (
+select a.id, lt.id from (
 	select a.id as asset_id, a.asset_cluster, lt.id as tag_id, lt.tag_cluster from public.tag_asset as ta
 	inner join linked.asset as a on a.id = ta."assetId"
 	inner join linked.tag as lt on ta."tagId" = lt.id) as b
@@ -383,55 +385,57 @@ on CONFLICT (id_ancestor,id_descendant) do nothing;
 
 ---- insert asset_file
 
-WITH joined AS (SELECT
+with base_linked as (SELECT m.id as source_id, m.files_cluster, m.asset_cluster, to_jsonb(t) AS data from linked.asset_file as m
+	inner join public.asset_file as t on t.id = m.id 
+	where m.base_owner is true),
+joined AS (SELECT
     n.id as new_id,
     n.owner_id,
     n.asset_id,
-    to_jsonb(t) AS data
-  	FROM (select  n.*, m.id as id_base from linked.asset_file as m
-    inner join linked.asset_file as n using (asset_cluster,files_cluster)
-    where m.base_owner is true and n.base_owner is false) as n
-  	left JOIN public.asset_file t ON t.id = n.id_base),
-patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-  								'ownerId', to_jsonb(owner_id),
-  								'assetId', to_jsonb(asset_id)) AS new_data FROM joined)
+    m.data
+  	FROM base_linked as m
+	left JOIN linked.asset_file as n using (asset_cluster,files_cluster)
+  	where n.base_owner is false)
 INSERT INTO public.asset_file
-SELECT (jsonb_populate_record(NULL::public.asset_file, new_data)).* FROM patched
+SELECT (jsonb_populate_record(NULL::public.asset_file, data || jsonb_build_object('id', to_jsonb(new_id),
+  								'ownerId', to_jsonb(owner_id),
+  								'assetId', to_jsonb(asset_id)))).* FROM joined
 on CONFLICT (id) do nothing;
 
 ---- insert asset_face
 
-WITH joined AS (SELECT
+with base_linked as (SELECT m.id as source_id, m.face_cluster, m.asset_cluster, to_jsonb(t) AS data from linked.asset_face as m
+	inner join public.asset_face as t on t.id = m.id 
+	where m.base_owner is true),
+joined AS (SELECT
     n.id as new_id,
     n.asset_id,
-    to_jsonb(t) AS data
-	FROM (select  n.*, m.id as idi from linked.asset_face as m
-    inner join linked.asset_face as n using (asset_cluster,face_cluster)
-    where m.base_owner is true and n.base_owner is false) as n
-  	left JOIN public.asset_face t ON t.id = n.idi),
-patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-  								'assetId', to_jsonb(asset_id)) AS new_data FROM joined)
+    m.data
+	FROM base_linked as m
+  	left JOIN linked.asset_face as n using (asset_cluster,face_cluster)
+  	where n.base_owner is false)
 INSERT INTO public.asset_face
-SELECT (jsonb_populate_record(NULL::public.asset_face, new_data)).* FROM patched
+SELECT (jsonb_populate_record(NULL::public.asset_face, data || jsonb_build_object('id', to_jsonb(new_id),
+  								'assetId', to_jsonb(asset_id)))).* FROM joined
 on CONFLICT (id) do nothing;
 
 ---- insert person
 
-WITH joined AS (SELECT
+with base_linked as (SELECT distinct on (m.person_id) m.id as source_id, m.face_cluster, m.asset_cluster, to_jsonb(t) AS data from linked.asset_face as m
+	inner join public.person as t on t.id = m.person_id 
+	where m.base_owner is true),
+joined AS (SELECT 
     n.person_id as new_id,
     n.owner_id,
     n.id,
-    n.idi,
-    to_jsonb(t) AS data
-  	FROM (select distinct on (n.person_id) n.*, m.person_id as idi from linked.asset_face as m
-		inner join linked.asset_face as n using (asset_cluster,face_cluster)
-		where m.base_owner is true and n.base_owner is false and m.person_id is not null) as n
-		left JOIN public.person t ON t.id = n.idi),
-patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-  								'ownerId', to_jsonb(owner_id),
-  								'faceAssetId', to_jsonb(id)) AS new_data FROM joined)
+    m.data
+  	FROM base_linked as m
+  	left JOIN linked.asset_face as n using (asset_cluster,face_cluster)
+  	where n.base_owner is false)
 INSERT INTO public.person
-SELECT (jsonb_populate_record(NULL::public.person, new_data)).* FROM patched
+SELECT (jsonb_populate_record(NULL::public.person, data || jsonb_build_object('id', to_jsonb(new_id),
+  								'ownerId', to_jsonb(owner_id),
+  								'faceAssetId', to_jsonb(id)))).* FROM joined
 on CONFLICT (id) do nothing;
 
 ---- update person_id in asset_face
@@ -443,16 +447,17 @@ where a.id = b.id;
 
 ---- insert asset_exif
 
-WITH joined AS (SELECT
+with base_linked as (SELECT m.asset_cluster, to_jsonb(t) AS data from linked.asset as m
+	inner join public.asset_exif as t on t."assetId" = m.id 
+	where m.base_owner is true),
+joined AS (SELECT
     n.id as new_id,
-    to_jsonb(t) AS data
-  	FROM linked.asset m
-  	inner JOIN public.asset_exif t ON t."assetId" = m.id
-  	left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
-  	where m.base_owner is true and n.base_owner is false),
-patched AS (SELECT data || jsonb_build_object('assetId', to_jsonb(new_id)) AS new_data FROM joined)
+    m.data
+  	FROM base_linked as m
+  	inner JOIN linked.asset as n ON m.asset_cluster = n.asset_cluster
+  	where n.base_owner is false)
 INSERT INTO public.asset_exif
-SELECT (jsonb_populate_record(NULL::public.asset_exif, new_data)).* FROM patched
+SELECT (jsonb_populate_record(NULL::public.asset_exif, data || jsonb_build_object('assetId', to_jsonb(new_id)))).* FROM joined
 on CONFLICT ("assetId") do nothing;
 
 ---- insert smart_search
@@ -467,17 +472,19 @@ on CONFLICT ("assetId") do nothing;
 
 ---- insert asset_ocr
 
-WITH joined AS (SELECT
+with base_linked as (SELECT m.asset_cluster, to_jsonb(t) AS data from linked.asset as m
+	inner join public.asset_ocr as t on t."assetId" = m.id 
+	where m.base_owner is true),
+joined AS (SELECT
     n.id as new_id,
 	uuid_generate_v4() as generated_id,
-    to_jsonb(t) AS data
-  	FROM linked.asset m
-  	inner JOIN public.asset_ocr t ON t."assetId" = m.id
-  	inner JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
-  	where m.base_owner is true and n.base_owner is false),
-patched AS (SELECT data || jsonb_build_object('assetId', to_jsonb(new_id), 'id', to_jsonb(generated_id)) AS new_data FROM joined)
+    m.data
+  	FROM base_linked as m
+  	inner JOIN linked.asset as n ON m.asset_cluster = n.asset_cluster
+	where n.base_owner is false)
 INSERT INTO public.asset_ocr
-SELECT (jsonb_populate_record(NULL::public.asset_ocr, new_data)).* FROM patched
+SELECT (jsonb_populate_record(NULL::public.asset_ocr, data || jsonb_build_object('assetId', to_jsonb(new_id), 
+	'id', to_jsonb(generated_id)))).* FROM joined
 on CONFLICT (id) do nothing;
 
 ---- insert ocr_search
@@ -515,6 +522,54 @@ select a.id,al.tag_id from linked.asset as a
 left join linked.album al using (album_cluster,owner_id)
 where not exists (select 1 from public.tag_asset where "assetId" = a.id and al.tag_id = "tagId")
 on CONFLICT ("assetId","tagId") do nothing;
+
+---- insert asset_audio
+
+WITH live_asset as (select pa."livePhotoVideoId" as id, la.asset_cluster, la.base_owner, to_jsonb(t) AS data from linked.asset as la
+	inner join public.asset as pa using(id)
+	inner join asset_audio t on t."assetId" = pa.id
+	where la.base_owner is true and t."codecName" is not null),
+joined AS (SELECT
+	n.id as new_id,
+    m.data
+  	FROM live_asset m
+  	left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
+	where n.base_owner is false)
+INSERT INTO asset_audio
+SELECT (jsonb_populate_record(NULL::asset_audio, data || jsonb_build_object('assetId', to_jsonb(new_id)))).* FROM joined
+ON CONFLICT ("assetId") DO NOTHING;
+
+---- insert asset_video
+
+WITH live_asset as (select pa."livePhotoVideoId" as id, la.asset_cluster, la.base_owner, to_jsonb(t) AS data from linked.asset as la
+	inner join public.asset as pa using(id)
+	inner join asset_video t on t."assetId" = pa.id
+	where la.base_owner is true and t."codecName" is not null),
+joined AS (SELECT
+	n.id as new_id,
+    m.data
+  	FROM live_asset m
+  	left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
+	where n.base_owner is false)
+INSERT INTO asset_video
+SELECT (jsonb_populate_record(NULL::asset_video, data || jsonb_build_object('assetId', to_jsonb(new_id)))).* FROM joined
+ON CONFLICT ("assetId") DO NOTHING;
+
+---- insert asset_keyframe
+
+WITH live_asset as (select pa."livePhotoVideoId" as id, la.asset_cluster, la.base_owner, to_jsonb(t) AS data from linked.asset as la
+	inner join public.asset as pa using(id)
+	inner join asset_keyframe t on t."assetId" = pa.id
+	where la.base_owner is true and t."outputFrames" is not null),
+joined AS (SELECT
+	n.id as new_id,
+	m.data
+  	FROM live_asset m
+  	left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
+	where n.base_owner is false)
+INSERT INTO asset_keyframe
+SELECT (jsonb_populate_record(NULL::asset_keyframe, data || jsonb_build_object('assetId', to_jsonb(new_id)))).* FROM joined
+ON CONFLICT ("assetId") DO NOTHING;
 
 
 ---------------------------------------------------------------------------------------------------------
@@ -846,7 +901,7 @@ DECLARE
 	a_cluster UUID;
 BEGIN
     IF EXISTS (SELECT 1 FROM linked.stack WHERE id = new.id and base_owner is true) THEN
-		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new."primaryAssetId";
+		SELECT asset_cluster INTO a_cluster FROM linked.asset WHERE id = new."primaryAssetId" and base_owner is true;
 		IF a_cluster is not null then
 			SELECT stack_cluster INTO s_cluster FROM linked.stack WHERE id = new.id;
 			update public.stack as s
@@ -879,8 +934,9 @@ BEGIN
 		IF new.description = 'create linked album' THEN
 			--- new linked album
 			with base as (select a."albumName" as album_name, uuid_generate_v4() as shared_album_cluster, 
-					la.album_cluster, a."ownerId" as owner_id, true as base_owner, a.id from public.album as a
-				left join linked.album as la on a."ownerId" = la.owner_id
+					la.album_cluster, au."userId" as owner_id, true as base_owner, a.id from public.album as a
+				left join public.album_user as au on a.id = au."albumId" and au.role = 'owner'
+				left join linked.album as la on au."userId" = la.owner_id
 				where a.id = new.id),
 			final_album as (
 				select album_name, shared_album_cluster, owner_id, base_owner, id from base
@@ -897,14 +953,16 @@ BEGIN
 				left JOIN public.album as t ON t.id = m.id
 				inner JOIN final_album as n ON m.shared_album_cluster = n.shared_album_cluster
 				where m.id = new.id and n.id != new.id),
-			patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id), 
-										'description', to_jsonb(''::text),
-										'ownerId', to_jsonb(owner_id)) AS new_data FROM joined),
 			insert_album as (
 				INSERT INTO public.album
-				SELECT (jsonb_populate_record(NULL::public.album, new_data)).*
-				FROM patched
+				SELECT (jsonb_populate_record(NULL::public.album, data || jsonb_build_object('id', to_jsonb(new_id), 
+										'description', to_jsonb(''::text)))).*
+				FROM joined
 				ON CONFLICT (id) DO NOTHING
+				RETURNING 1),
+			insert_album_user as (INSERT INTO public.album_user ("albumId","userId","role")
+				select new_id, owner_id, 'owner' from joined
+				ON CONFLICT ("albumId","userId") DO NOTHING
 				RETURNING 1)
 			--- into linked.shared_album
 			insert into linked.shared_album (album_name,shared_album_cluster,owner_id,base_owner,id)
@@ -1178,12 +1236,11 @@ BEGIN
 				inner JOIN public.person t ON t.id = m.id
 				inner JOIN final_person n ON m.asset_cluster = n.asset_cluster and m.face_cluster = n.face_cluster
 				where m.base_owner is true and n.base_owner is false),
-			patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-			  								'ownerId', to_jsonb(owner_id),
-			  								'faceAssetId', to_jsonb(face_asset_id)) AS new_data FROM joined),
 			insert_into_person as (
 				INSERT INTO public.person
-				SELECT (jsonb_populate_record(NULL::public.person, new_data)).* FROM patched
+				SELECT (jsonb_populate_record(NULL::public.person, data || jsonb_build_object('id', to_jsonb(new_id),
+			  								'ownerId', to_jsonb(owner_id),
+			  								'faceAssetId', to_jsonb(face_asset_id)))).* FROM joined
 				ON CONFLICT (id) DO NOTHING
 				RETURNING 1),
 			--- link face to preson
@@ -1241,7 +1298,7 @@ on public.system_metadata for each row
 WHEN (pg_trigger_depth() = 0)
 execute function linked.check_storage_template();
 
----- create new albums
+---- create new asset to albums
 
 CREATE OR REPLACE FUNCTION linked.link_new_album()
 RETURNS TRIGGER AS $$
@@ -1303,12 +1360,11 @@ BEGIN
 				  	left JOIN public.tag as t ON t.id = m.id
 				  	inner JOIN final_tag as n ON m.tag_cluster = n.tag_cluster
 					where m.id = new."tagId" and n.id != new."tagId"),
-				patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-				  							'parentId', to_jsonb(parent_id),
-				  							'userId', to_jsonb(owner_id)) AS new_data FROM joined),
 				insert_tag as (
 					INSERT INTO public.tag
-					SELECT (jsonb_populate_record(NULL::public.tag, new_data)).* FROM patched
+					SELECT (jsonb_populate_record(NULL::public.tag, data || jsonb_build_object('id', to_jsonb(new_id),
+				  							'parentId', to_jsonb(parent_id),
+				  							'userId', to_jsonb(owner_id)))).* FROM joined
 					ON CONFLICT (id) DO NOTHING
 					RETURNING 1),
 				--- into linked.tag
@@ -1409,23 +1465,40 @@ BEGIN
 				left join linked.stack as ls on ls.stack_cluster = a_stack_cluster and ls.owner_id = b.owner_id
 				left join asset_filter as aa on b.owner_id = aa.owner_id and aa.asset_cluster = a.asset_cluster),
 			joined AS (SELECT 
+				m.id as source_id,
 				n.id as new_id,
 				n.owner_id,
-				lp.id as livephoto_id,
-			    to_jsonb(t) AS data
+				lp.id as livephoto_id
 			    FROM final_table m
-			    left JOIN public.asset t ON t.id = m.id
 			    left JOIN final_table n ON m.asset_cluster = n.asset_cluster
 				left join final_table lp on lp.owner_id = n.owner_id and lp.livephoto is true and n.livephoto is false
 			    where m.base_owner is true and n.base_owner is false),
-			patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
+			insert_asset as (INSERT INTO public.asset
+				SELECT (jsonb_populate_record(NULL::public.asset, to_jsonb(t) || jsonb_build_object('id', to_jsonb(new_id),
 			  							'stackId', null,
 										'livePhotoVideoId', to_jsonb(livephoto_id),
 										'duplicateId', null,
-			  							'ownerId', to_jsonb(owner_id)) AS new_data FROM joined),
-			insert_asset as (INSERT INTO public.asset
-				SELECT (jsonb_populate_record(NULL::public.asset, new_data)).* FROM patched
+			  							'ownerId', to_jsonb(owner_id)))).* FROM public.asset as t 
+										inner join joined as j on t.id = j.source_id
 				ON CONFLICT (id) DO NOTHING
+				RETURNING 1),
+			insert_keyframe as (INSERT INTO public.asset_keyframe
+				SELECT (jsonb_populate_record(NULL::public.asset_keyframe, to_jsonb(ak) || jsonb_build_object('assetId', to_jsonb(j.livephoto_id)))).* 
+				FROM public.asset_keyframe as ak 
+				inner join joined as j on ak."assetId" = j.livephoto_id
+				ON CONFLICT ("assetId") DO NOTHING
+				RETURNING 1),
+			insert_audio as (INSERT INTO public.asset_audio
+				SELECT (jsonb_populate_record(NULL::public.asset_audio, to_jsonb(aa) || jsonb_build_object('assetId', to_jsonb(j.livephoto_id)))).* 
+				FROM public.asset_audio as aa
+				inner join joined as j on j.livephoto_id = aa."assetId"
+				ON CONFLICT ("assetId") DO NOTHING
+				RETURNING 1),
+			insert_video as (INSERT INTO public.asset_video
+				SELECT (jsonb_populate_record(NULL::public.asset_video, to_jsonb(av) || jsonb_build_object('assetId', to_jsonb(j.livephoto_id)))).* 
+				FROM public.asset_video as av
+				inner join joined as j on j.livephoto_id = av."assetId"
+				ON CONFLICT ("assetId") DO NOTHING
 				RETURNING 1),
 			--- insert into linked
 			insert_linked_asset as (insert into linked.asset (album_cluster,asset_cluster,owner_id,base_owner,id)
@@ -1467,10 +1540,9 @@ BEGIN
 			    left JOIN final_table n ON m.asset_cluster = n.asset_cluster
 				left join final_table lp on lp.owner_id = n.owner_id
 			    where m.base_owner is true and n.base_owner is false and t.id is not null),
-			patched_asset_edit AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-										'assetId', to_jsonb(asset_id)) AS new_data FROM joined_asset_edit),
 			insert_asset_edit as (INSERT INTO public.asset_edit
-				SELECT (jsonb_populate_record(NULL::public.asset_edit, new_data)).* FROM patched_asset_edit
+				SELECT (jsonb_populate_record(NULL::public.asset_edit, data || jsonb_build_object('id', to_jsonb(new_id),
+										'assetId', to_jsonb(asset_id)))).* FROM joined_asset_edit
 				ON conflict ("assetId","sequence") do nothing
 				RETURNING 1)
 			--- insert new tag_asset
@@ -1525,13 +1597,11 @@ BEGIN
 			left JOIN public.asset_file t ON t.id = m.id
 			left JOIN final_asset_file n ON m.asset_cluster = n.asset_cluster and m.files_cluster = n.files_cluster
 			where m.base_owner is true and n.base_owner is false),
-		patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-		  								'ownerId', to_jsonb(owner_id),
-		  								'assetId', to_jsonb(asset_id)) AS new_data FROM joined),
 		insert_asset_file as (
 			INSERT INTO public.asset_file
-			SELECT (jsonb_populate_record(NULL::public.asset_file, new_data)).*
-			FROM patched
+			SELECT (jsonb_populate_record(NULL::public.asset_file, data || jsonb_build_object('id', to_jsonb(new_id),
+		  								'ownerId', to_jsonb(owner_id),
+		  								'assetId', to_jsonb(asset_id)))).* FROM joined
 			ON CONFLICT (id) DO NOTHING
 			RETURNING 1)
 		--- insert into linked.asset_file
@@ -1585,12 +1655,10 @@ BEGIN
 			inner JOIN public.asset_face t ON t.id = m.id
 			inner JOIN final_asset_face n ON m.asset_cluster = n.asset_cluster and m.face_cluster = n.face_cluster
 			where m.base_owner is true and n.base_owner is false),
-		patched AS (SELECT data || jsonb_build_object('id', to_jsonb(new_id),
-											'personId', to_jsonb(person_id),
-			  								'assetId', to_jsonb(asset_id)) AS new_data FROM joined),
 		insert_asset_face as (INSERT INTO public.asset_face
-			SELECT (jsonb_populate_record(NULL::public.asset_face, new_data)).*
-			FROM patched
+			SELECT (jsonb_populate_record(NULL::public.asset_face, data || jsonb_build_object('id', to_jsonb(new_id),
+											'personId', to_jsonb(person_id),
+			  								'assetId', to_jsonb(asset_id)))).* FROM joined
 			ON CONFLICT (id) DO NOTHING
 			RETURNING 1),
 		--- update faces
@@ -1631,10 +1699,9 @@ BEGIN
 		  	FROM linked.asset m
 		  	left JOIN public.asset_exif t ON t."assetId" = m.id
 		  	left JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
-		  	where m.base_owner is true and n.base_owner is false and m.id = new.id),
-		patched AS (SELECT data || jsonb_build_object('assetId', to_jsonb(new_id)) AS new_data FROM joined)
+		  	where m.base_owner is true and n.base_owner is false and m.id = new.id)
 		INSERT INTO public.asset_exif
-		SELECT (jsonb_populate_record(NULL::public.asset_exif, new_data)).* FROM patched
+		SELECT (jsonb_populate_record(NULL::public.asset_exif, data || jsonb_build_object('assetId', to_jsonb(new_id)))).* FROM joined
 		ON CONFLICT ("assetId") DO NOTHING;
 	END IF;
     RETURN NULL;
@@ -1686,10 +1753,10 @@ BEGIN
 		  	FROM linked.asset m
 		  	inner JOIN public.asset_ocr t ON t."assetId" = m.id
 		  	inner JOIN linked.asset n ON m.asset_cluster = n.asset_cluster
-		  	where m.base_owner is true and n.base_owner is false and m.id = new.id),
-		patched AS (SELECT data || jsonb_build_object('assetId', to_jsonb(new_id), 'id', to_jsonb(generated_id)) AS new_data FROM joined)
+		  	where m.base_owner is true and n.base_owner is false and m.id = new.id)
 		INSERT INTO public.asset_ocr
-		SELECT (jsonb_populate_record(NULL::public.asset_ocr, new_data)).* FROM patched
+		SELECT (jsonb_populate_record(NULL::public.asset_ocr, data || jsonb_build_object('assetId', 
+			to_jsonb(new_id), 'id', to_jsonb(generated_id)))).* FROM joined
 		ON CONFLICT (id) DO NOTHING;
 	END IF;
     RETURN NULL;
